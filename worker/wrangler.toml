@@ -15,7 +15,7 @@ crons = ["0 * * * *"]
 # сесии, ограничения на опитите и кеш: wrangler kv namespace create adm-zdoi
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "7a5361639ca94fc99f9ae3a528ba8079"
 
 # публични стойности; тайните (PEPPER, SETUP_KEY, MS_PRIVATE_KEY) се задават с wrangler secret put
 [vars]
