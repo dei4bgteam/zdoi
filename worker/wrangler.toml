@@ -26,6 +26,7 @@ MAIL_SENDER = "no-reply@zdoi.eu"
 # https://bulmaileu.sharepoint.com/sites/adm-zdoi – създаден с tools/sp-provision.js
 SP_SITE = "bulmaileu.sharepoint.com,c089c092-6209-4a58-a6f1-8a9ff9db54cb,cac3c2b2-5302-4544-a8c0-6ae13823279d"
 MS_TENANT = "16d24843-7704-4206-87f4-bc20073547ac"
-MS_CLIENT_ID = "REPLACE_CLIENT_ID"
-MS_CERT_SHA1 = "REPLACE_CERT_SHA1"
-MS_CERT_SHA256 = "REPLACE_CERT_SHA256"
+# приложение „ADM ZDOI4You“ в Entra (tools/entra-setup.js); сертификатът важи до 15.11.2028
+MS_CLIENT_ID = "f60efce5-3054-47fa-9edb-8997695e2703"
+MS_CERT_SHA1 = "5a495fb0d5719da449e5e4e76936aff03df65676"
+MS_CERT_SHA256 = "f4c5bb9523666fa0648495ae02be8269b71d29e558ed0ae1c5c16a09ce592b11"
