@@ -208,3 +208,9 @@ dialog .actions { justify-content: flex-end; margin-top: 16px; }
 .addr-pick summary { cursor: pointer; font-size: 13px; color: var(--link); }
 fieldset legend { color: var(--ink); }
 .msg .pill { margin-right: 4px; }
+
+/* вход с външни профили */
+.oauth-box .or { text-align: center; margin: 4px 0; }
+.oauth-btn { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.oauth-ico { display: inline-flex; width: 18px; height: 18px; flex: none; }
+.oauth-line { display: inline-flex; align-items: center; gap: 10px; }

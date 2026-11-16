@@ -254,15 +254,31 @@ function gate(title, sub, ...body) {
     h('p', { class: 'gate-foot' }, 'ADM ЗДОИ4You – вътрешна система. Достъпът е само за упълномощени служители.')));
 }
 
-function loginView() {
+const PROVIDER_ICON = {
+  google: '<svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>',
+  microsoft: '<svg viewBox="0 0 21 21" width="18" height="18" aria-hidden="true"><path fill="#f25022" d="M1 1h9v9H1z"/><path fill="#7fba00" d="M11 1h9v9h-9z"/><path fill="#00a4ef" d="M1 11h9v9H1z"/><path fill="#ffb900" d="M11 11h9v9h-9z"/></svg>',
+  discord: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#5865F2" d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.6 1.3a18.4 18.4 0 0 0-5.5 0L8.6 3a19.7 19.7 0 0 0-4.9 1.5C.6 9.1-.3 13.7.1 18.2a19.9 19.9 0 0 0 6 3l1.3-2a12.9 12.9 0 0 1-2-1l.5-.4a14.2 14.2 0 0 0 12.2 0l.5.4c-.6.4-1.3.7-2 1l1.3 2a19.8 19.8 0 0 0 6-3c.5-5.2-.9-9.8-3.6-13.8zM8 15.4c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg>'
+};
+const providerIcon = p => { const s = h('span', { class: 'oauth-ico' }); s.innerHTML = PROVIDER_ICON[p] || ''; return s; };
+
+function loginView(error) {
+  const external = h('div', { class: 'stack oauth-box', hidden: true });
   const form = h('form', { autocomplete: 'on' },
+    error ? h('p', { class: 'err', role: 'alert' }, error) : null,
     h('div', { class: 'stack' },
       field({ k: 'username', label: 'Потребител', req: true, autocomplete: 'username', max: 40 }),
       field({ k: 'password', label: 'Парола', type: 'password', req: true, autocomplete: 'current-password', max: 200 })),
     h('button', { type: 'submit', class: 'btn primary block' }, 'Вход'),
+    external,
     h('div', { class: 'gate-links' }, h('a', { href: '#/forgot' }, 'Забравена парола'), h('a', { href: '#/calc' }, 'Калкулатор на срокове')));
   gate('Вход', 'Влезте с потребителското име и паролата си.', form);
   form.username.focus();
+  api('oauth.providers').then(r => {
+    if (!r.providers.length) return;
+    external.replaceChildren(h('div', { class: 'or small muted' }, 'или'),
+      ...r.providers.map(p => h('a',{ class: 'btn block oauth-btn', href: '/api/oauth/' + p.id + '/start' }, providerIcon(p.id), 'Вход с ' + p.label)));
+    external.hidden = false;
+  }).catch(() => { /* без външен вход */ });
   onSubmit(form, async v => {
     const username = v.username.toLowerCase();
     const r = await api('login', { username, hash: await preHash(username, form.password.value) });
@@ -769,12 +785,31 @@ async function profileView() {
   h('button', { type: 'submit', class: 'btn block' }, 'Запази известията'));
   onSubmit(notify, async v => { await api('notify.save', v); toast('Известията са запазени.'); });
 
+  const linkedCard = h('section', { class: 'card stack' }, h('h2', null, 'Вход с външни профили'), h('p', { class: 'loading' }, 'Зареждане…'));
   setView(head('Моят профил'), h('div', { class: 'grid2' },
     h('section', { class: 'card stack' }, h('h2', null, 'Данни'), kv([['Потребител', m.username], ['Име', m.name], ['Роля', m.role], ['Длъжност', m.position], ['Отдел', m.department], ['Имейл', m.email], ['Телефон', m.phone],
       ['Права', Object.keys(m.perms).map(k => PERM_LABELS[k]).join('; ')]]), h('p', { class: 'small muted' }, 'Данните се променят от администратор.'), h('a', { href: '#/logins' }, 'Моите входове')),
     h('section', { class: 'card stack' }, h('h2', null, 'Парола'), pw),
     h('section', { class: 'card stack' }, h('h2', null, 'Двуфакторен вход'), twofa),
-    h('section', { class: 'card stack' }, h('h2', null, 'Известия по имейл'), notify)));
+    h('section', { class: 'card stack' }, h('h2', null, 'Известия по имейл'), notify),
+    linkedCard));
+  // свързани профили за вход
+  api('oauth.providers').then(r => {
+    const linked = m.linked || {};
+    const ids = new Set(r.providers.map(p => p.id).concat(Object.keys(linked)));
+    const label = id => (r.providers.find(p => p.id === id) || {}).label || ({ google: 'Google', microsoft: 'Microsoft', discord: 'Discord' })[id] || id;
+    linkedCard.replaceChildren(h('h2', null, 'Вход с външни профили'),
+      h('p', { class: 'small muted' }, 'Свържете профил, за да влизате с него без парола. Двуфакторният вход (ако е включен) важи и тук.'),
+      ids.size ? h('ul', { class: 'list-plain' }, [...ids].map(id => {
+        const x = linked[id], on = r.providers.some(p => p.id === id);
+        return h('li', null, h('span', { class: 'oauth-line' }, providerIcon(id), h('span', null, h('b', null, label(id)), h('br'),
+          h('span', { class: 'small muted' }, x ? 'свързан' + (x.email ? ' – ' + x.email : '') + (x.at ? ' · ' + fmtTime(x.at) : '') : on ? 'не е свързан' : 'изключен от администратора'))),
+          x ? h('button', { class: 'btn sm', onclick: async () => {
+            if (!confirm('Да се премахне входът с ' + label(id) + '?')) return;
+            try { await api('oauth.unlink', { provider: id }); toast('Премахнато.'); profileView(); } catch (e) { toast(e.message); }
+          } }, 'Премахни') : on ? h('a', { class: 'btn sm primary', href: '/api/oauth/' + id + '/start?link=1' }, 'Свържи') : null);
+      })) : h('p', { class: 'empty' }, 'Външният вход е изключен.'));
+  }).catch(e => linkedCard.replaceChildren(h('p', { class: 'err' }, e.message)));
 }
 
 /* ---------- калкулатор на срокове (работи и без вход) ---------- */
@@ -1347,6 +1382,24 @@ async function mailInboxView() {
 
 /* ---------- системни процеси ---------- */
 
+/* настройки за вход с Google, Microsoft и Discord */
+function oauthCard() {
+  const card = h('section', { class: 'card stack' }, h('h2', null, 'Вход с външни профили'), h('p', { class: 'loading' }, 'Зареждане…'));
+  api('oauth.settings').then(({ providers }) => {
+    const list = providers.filter(p => p.id !== '_autoLink'), auto = providers.find(p => p.id === '_autoLink');
+    const form = h('form', null, h('div', { class: 'stack' },
+      list.map(p => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: p.id, checked: p.on && p.configured, disabled: !p.configured }),
+        h('span', { class: 'oauth-line' }, providerIcon(p.id), h('span', null, p.label + (p.configured ? '' : ' (не е настроен)'), h('br'), h('span', { class: 'small muted mono' }, p.redirect))))),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'autoLink', checked: auto.on }),
+        h('span', null, 'Автоматично свързване по имейл', h('br'), h('span', { class: 'small muted' }, 'При първи вход профилът се свързва с потребителя, чийто имейл в системата съвпада с потвърдения имейл в профила.')))),
+    h('p', { class: 'note mt-12' }, 'Нови потребители не се създават – външният вход пуска само активни служители, добавени от администратор.'),
+    h('div', { class: 'actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Запази')));
+    onSubmit(form, async v => { await api('oauth.save', Object.assign({}, ...list.map(p => ({ [p.id]: p.configured ? !!v[p.id] : true })), { autoLink: !!v.autoLink })); toast('Запазено.'); });
+    card.replaceChildren(h('h2', null, 'Вход с външни профили'), form);
+  }).catch(e => card.replaceChildren(h('h2', null, 'Вход с външни профили'), h('p', { class: 'err' }, e.message)));
+  return card;
+}
+
 async function systemView() {
   loading();
   let s;
@@ -1382,6 +1435,7 @@ async function systemView() {
         h('div', { class: 'actions' },
           h('button', { class: 'btn primary', onclick: async e => { e.target.disabled = true; try { const r = (await api('system.poll')).run; toast(r.error ? 'Грешка: ' + r.error : `Нови писма: ${r.saved}, разпределени: ${r.matched}.`); systemView(); } catch (ex) { toast(ex.message); } finally { e.target.disabled = false; } } }, 'Провери пощата сега'),
           h('a', { class: 'btn', href: '#/mail' }, 'Неразпределени'))),
+      oauthCard(),
       h('section', { class: 'card stack' }, h('h2', null, 'Номерация и срокове'), kv([
         ['Следващ Изх. №', s.nextOutNo], ['Номер на преписка', 'П-ГГГГ-NNNN (изходящи), ВХ-ГГГГ-NNNN (входящ регистър)'],
         ['Напомняния за срокове', 'всеки ден след 8:00 ч. (днес: ' + s.lastReminder + ')']])),
@@ -1406,11 +1460,14 @@ async function route() {
     if (page === 'activate') return activateView(parts[1] || '', parts[2] || '');
     if (page === 'forgot') return forgotView();
     if (page === 'calc') return calcView();
+    if (page === 'code' && /^[0-9a-f]{64}$/.test(parts[1] || '')) { history.replaceState(null, '', '#/login'); return codeView(parts[1]); }
     if (page !== 'login') { history.replaceState(null, '', '#/login'); }
-    return loginView();
+    return loginView(new URLSearchParams(query || '').get('err'));
   }
-  if (['login', 'activate', 'forgot'].includes(page)) { location.hash = '#/dashboard'; return; }
+  if (['login', 'activate', 'forgot', 'code'].includes(page)) { location.hash = '#/dashboard'; return; }
   shell();
+  const q = new URLSearchParams(query || '');
+  if (page === 'profile' && (q.get('ok') || q.get('err'))) { toast(q.get('ok') || q.get('err')); history.replaceState(null, '', '#/profile'); }
   switch (page) {
     case 'dashboard': return dashboardView();
     case 'cases': return casesView(query);

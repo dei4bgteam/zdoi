@@ -61,15 +61,21 @@ export function notifyOf(u) {
 
 const meInfo = u => ({
   username: u.username, name: u.name, role: u.role, perms: permsOf(u), twofa: u.twofa === 'Да',
-  email: u.email, position: u.position, phone: u.phone, department: u.department, notify: notifyOf(u)
+  email: u.email, position: u.position, phone: u.phone, department: u.department, notify: notifyOf(u),
+  linked: Object.fromEntries(Object.entries(oauthOf(u)).map(([p, x]) => [p, { email: x.email || '', name: x.name || '', at: x.at || '' }]))
 });
+
+/* свързани външни профили за вход: { google: { id, email, name, at }, microsoft: {…}, discord: {…} } */
+export function oauthOf(u) {
+  try { const o = JSON.parse(u.oauth || '{}'); return o && typeof o === 'object' && !Array.isArray(o) ? o : {}; } catch (_) { return {}; }
+}
 
 /* ---------- вход ---------- */
 
 const badLogin = left => fail('login', 'Грешен потребител или парола.' + (left ? ' Остават ' + left + (left === 1 ? ' опит.' : ' опита.') : ''));
 const LOCKED = 'Твърде много неуспешни опити. Опитайте отново след 15 минути или поискайте нова парола по имейл.';
 
-const recordLogin = (app, username, result) =>
+export const recordLogin = (app, username, result) =>
   app.store.insert('logins', { at: stamp(), username, ip: app.ip, agent: app.agent, result });
 
 export async function login(d, ctx, app) {
@@ -98,7 +104,7 @@ export async function login(d, ctx, app) {
   return openSession(app, u);
 }
 
-async function startCode(app, u) {
+export async function startCode(app, u) {
   const sent = await throttle(app, 'codesent|' + u.username, 5);
   if (await sent.blocked()) fail('locked', 'Изпратени са твърде много кодове. Опитайте отново след 15 минути.');
   await sent.hit();
@@ -134,10 +140,10 @@ export async function loginCode(d, ctx, app) {
   return openSession(app, u);
 }
 
-async function openSession(app, u) {
+export async function openSession(app, u, how) {
   await app.store.patch('users', u._id, { lastLogin: stamp() });
-  await recordLogin(app, u.username, 'Успешен');
-  await audit(app, u.username, 'Вход', '', app.ip);
+  await recordLogin(app, u.username, how ? 'Успешен (' + how + ')' : 'Успешен');
+  await audit(app, u.username, how ? 'Вход с ' + how : 'Вход', '', app.ip);
   const token = randomToken(), exp = Date.now() + CFG.SESSION_MIN * 6e4;
   await saveSession(app, token, { u: u.username, exp });
   return { __cookie: token, session: exp, me: meInfo(u) };

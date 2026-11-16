@@ -32,3 +32,10 @@ MS_TENANT = "16d24843-7704-4206-87f4-bc20073547ac"
 MS_CLIENT_ID = "f60efce5-3054-47fa-9edb-8997695e2703"
 MS_CERT_SHA1 = "5a495fb0d5719da449e5e4e76936aff03df65676"
 MS_CERT_SHA256 = "f4c5bb9523666fa0648495ae02be8269b71d29e558ed0ae1c5c16a09ce592b11"
+
+# вход с външни профили (адрес за връщане: https://adm.zdoi.eu/api/oauth/<google|microsoft|discord>/callback)
+# Microsoft: приложение „ADM ZDOI4You – вход“ (tools/oauth-setup.js), само за организацията, със същия сертификат
+MS_LOGIN_CLIENT_ID = "d33a4408-fdb0-4d3b-8d34-52634dfb75f5"
+# Google и Discord: тайните са GOOGLE_CLIENT_SECRET и DISCORD_CLIENT_SECRET (wrangler secret put)
+GOOGLE_CLIENT_ID = "838853307992-pm38r04rn6fbm08aq9t7t2nq1eru4keu.apps.googleusercontent.com"
+DISCORD_CLIENT_ID = "1572024839965900890"

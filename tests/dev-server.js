@@ -29,6 +29,8 @@ const mailbox = {
 const env = {
   APP_URL: ORIGIN + '/', PEPPER: 'dev-pepper-'.padEnd(48, 'x'), SETUP_KEY: 'dev', MAILBOX: 'priemna@zdoi.eu', __mailbox: mailbox,
   __store: new MemoryStore(), __kv: new MemoryKV(),
+  // външен вход (по желание): GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… node tests/dev-server.js
+  ...Object.fromEntries(['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET'].filter(k => process.env[k]).map(k => [k, process.env[k]])),
   __mailer: async (to, subject, text) => console.log('\n✉  ' + to + ' – ' + subject + '\n' + text.split('\n').map(l => '   ' + l).join('\n'))
 };
 

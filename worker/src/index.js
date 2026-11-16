@@ -17,6 +17,7 @@ import * as auth from './auth.js';
 import * as users from './users.js';
 import * as cases from './cases.js';
 import * as reqs from './requests.js';
+import * as oauth from './oauth.js';
 import { ROLE_ADMIN } from './config.js';
 
 /* auth: public | user | admin; perm: нужно право; */
@@ -26,6 +27,10 @@ export const ACTIONS = {
   activate: { auth: 'public', fn: auth.activate },
   forgot: { auth: 'public', fn: auth.forgot },
   'link.check': { auth: 'public', fn: auth.linkCheck },
+  'oauth.providers': { auth: 'public', fn: oauth.providersList },
+  'oauth.unlink': { auth: 'user', fn: oauth.oauthUnlink },
+  'oauth.settings': { auth: 'admin', fn: async (d, ctx, app) => ({ providers: await oauth.oauthSystem(app) }) },
+  'oauth.save': { auth: 'admin', fn: oauth.oauthSystemSave },
 
   me: { auth: 'user', fn: auth.me },
   logout: { auth: 'user', fn: auth.logout },
@@ -206,6 +211,10 @@ export default {
     if (path === '/api/health') return json({ ok: true, service: 'adm-zdoi', store: env.STORE === 'memory' ? 'memory' : 'sharepoint' });
     if (path === '/api/setup') return handleSetup(req, env);
     if (path === '/api') return handleApi(req, env);
+    if (path.startsWith('/api/oauth/')) {
+      const { store, kv } = services(env);
+      return oauth.handleOAuth(req, makeApp(env, store, kv, req), cookie);
+    }
     return json({ ok: false, error: 'notfound' }, 404);
   },
   async scheduled(event, env, ctx) {

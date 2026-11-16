@@ -12,7 +12,8 @@ export const SCHEMA = {
     email: ['Имейл'], phone: ['Телефон'], role: ['Роля'], active: ['Активен'], department: ['Отдел'],
     perms: ['Права (JSON)'], notify: ['Известия (JSON)'], twofa: ['Двуфакторен вход'],
     salt: ['Сол'], hash: ['Хеш'], inviteHash: ['Покана (хеш)'], inviteExp: ['Покана до'], codeHash: ['Код (HMAC)'], codeExp: ['Код до'],
-    lastLogin: ['Последен вход'], createdAt: ['Създаден'], createdBy: ['Създал']
+    lastLogin: ['Последен вход'], createdAt: ['Създаден'], createdBy: ['Създал'],
+    oauth: ['Външни профили за вход (JSON)', 'long']
   }, r => r.username],
   cases: ['ADM Преписки', {
     regNo: ['Рег. №', 'index'], createdAt: ['Въведена'], createdBy: ['Въвел'],
