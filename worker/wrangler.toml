@@ -1,0 +1,31 @@
+# ADM ЗДОИ4You – Cloudflare Worker на adm.zdoi.eu/api/*
+name = "adm-zdoi"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = false
+
+routes = [
+  { pattern = "adm.zdoi.eu/api*", zone_name = "zdoi.eu" }
+]
+
+# напомняния за срокове – всеки час; изпращат се веднъж на ден след 8:00 ч.
+[triggers]
+crons = ["0 * * * *"]
+
+# сесии, ограничения на опитите и кеш: wrangler kv namespace create adm-zdoi
+[[kv_namespaces]]
+binding = "KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# публични стойности; тайните (PEPPER, SETUP_KEY, MS_PRIVATE_KEY) се задават с wrangler secret put
+[vars]
+APP_URL = "https://adm.zdoi.eu/"
+APP_NAME = "ADM ЗДОИ4You"
+SUPPORT = "support@zdoi.eu"
+MAIL_SENDER = "no-reply@zdoi.eu"
+# https://bulmaileu.sharepoint.com/sites/adm-zdoi – създаден с tools/sp-provision.js
+SP_SITE = "bulmaileu.sharepoint.com,c089c092-6209-4a58-a6f1-8a9ff9db54cb,cac3c2b2-5302-4544-a8c0-6ae13823279d"
+MS_TENANT = "16d24843-7704-4206-87f4-bc20073547ac"
+MS_CLIENT_ID = "REPLACE_CLIENT_ID"
+MS_CERT_SHA1 = "REPLACE_CERT_SHA1"
+MS_CERT_SHA256 = "REPLACE_CERT_SHA256"

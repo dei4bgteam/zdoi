@@ -1,0 +1,184 @@
+/*
+ * ADM ЗДОИ4You – вътрешна система. Cloudflare Worker на adm.zdoi.eu/api/*.
+ *
+ * POST /api        { action, data } → { ok, ... }      – всички действия
+ * POST /api/setup  заглавка X-Setup-Key                 – създава списъците в SharePoint и първия администратор
+ * GET  /api/health                                      – проверка
+ * Cron всеки час                                        – напомняния за срокове
+ */
+
+import { CFG } from './config.js';
+import { AppError, fail, str, line, isEmail, stamp } from './util.js';
+import { makeApp, audit } from './core.js';
+import { SharePointStore } from './store/sharepoint.js';
+import { MemoryStore, MemoryKV } from './store/memory.js';
+import { sameText } from './crypto.js';
+import * as auth from './auth.js';
+import * as users from './users.js';
+import * as cases from './cases.js';
+import { ROLE_ADMIN } from './config.js';
+
+/* auth: public | user | admin; perm: нужно право; */
+export const ACTIONS = {
+  login: { auth: 'public', fn: auth.login },
+  'login.code': { auth: 'public', fn: auth.loginCode },
+  activate: { auth: 'public', fn: auth.activate },
+  forgot: { auth: 'public', fn: auth.forgot },
+  'link.check': { auth: 'public', fn: auth.linkCheck },
+
+  me: { auth: 'user', fn: auth.me },
+  logout: { auth: 'user', fn: auth.logout },
+  password: { auth: 'user', fn: auth.changePassword },
+  'twofa.start': { auth: 'user', fn: auth.twofaStart },
+  'twofa.confirm': { auth: 'user', fn: auth.twofaConfirm },
+  'notify.save': { auth: 'user', fn: auth.notifySave },
+
+  bootstrap: { auth: 'user', fn: cases.bootstrap },
+  dashboard: { auth: 'user', fn: cases.dashboard },
+  'case.list': { auth: 'user', fn: cases.caseList },
+  'case.get': { auth: 'user', fn: cases.caseGet },
+  'case.create': { auth: 'user', perm: 'casesEdit', fn: cases.caseCreate },
+  'case.update': { auth: 'user', perm: 'casesEdit', fn: cases.caseUpdate },
+  'case.assign': { auth: 'user', perm: 'casesEdit', fn: cases.caseAssign },
+  'case.lock': { auth: 'user', perm: 'casesEdit', fn: cases.caseLock },
+  'case.comment': { auth: 'user', perm: 'casesEdit', fn: cases.caseComment },
+  'court.list': { auth: 'user', fn: cases.courtList },
+  'court.save': { auth: 'user', perm: 'courts', fn: cases.courtSave },
+  'court.delete': { auth: 'user', perm: 'courts', fn: cases.courtDelete },
+  'addressee.list': { auth: 'user', fn: cases.addresseeList },
+  'addressee.save': { auth: 'user', perm: 'addressees', fn: cases.addresseeSave },
+  'addressee.delete': { auth: 'user', perm: 'addressees', fn: cases.addresseeDelete },
+  'department.list': { auth: 'user', fn: users.departmentsList },
+  'department.save': { auth: 'user', perm: 'departments', fn: users.departmentsSave },
+  'log.list': { auth: 'user', perm: 'log', fn: users.logList },
+  'logins.list': { auth: 'user', fn: users.loginsList },
+
+  'users.list': { auth: 'admin', fn: users.usersList },
+  'users.save': { auth: 'admin', fn: users.usersSave },
+  'users.invite': { auth: 'admin', fn: users.usersInvite }
+};
+
+/* ---------- среда ---------- */
+
+let devStore = null, devKv = null;
+export function services(env) {
+  if (env.__store) return { store: env.__store, kv: env.__kv };
+  if (env.STORE === 'memory') {
+    devStore = devStore || new MemoryStore();
+    devKv = devKv || new MemoryKV();
+    return { store: devStore, kv: env.KV || devKv };
+  }
+  if (!env.KV) throw new Error('Липсва KV namespace (KV).');
+  return { store: new SharePointStore(env), kv: env.KV };
+}
+
+const SECURITY = {
+  'Content-Type': 'application/json; charset=utf-8',
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'X-Robots-Tag': 'noindex'
+};
+
+function json(obj, status = 200, extra = {}) {
+  return new Response(JSON.stringify(obj), { status, headers: Object.assign({}, SECURITY, extra) });
+}
+
+function cookie(app, token) {
+  const secure = app.cfg.appUrl.startsWith('https:') ? '; Secure' : '';
+  return token
+    ? 'adm_s=' + token + '; Path=/api; HttpOnly; SameSite=Strict; Max-Age=' + CFG.SESSION_MIN * 60 * 4 + secure
+    : 'adm_s=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0' + secure;
+}
+
+/* заявките с бисквитка се приемат само от собствения адрес на системата (защита от CSRF) */
+function sameOrigin(req, app) {
+  const o = req.headers.get('Origin');
+  if (o) return o === app.cfg.origin || (app.env.DEV_ORIGIN && o === app.env.DEV_ORIGIN);
+  return req.headers.get('Sec-Fetch-Site') === 'same-origin';
+}
+
+export async function dispatch(app, req, body) {
+  const name = String(body && body.action);
+  if (!Object.prototype.hasOwnProperty.call(ACTIONS, name)) fail('action', 'Непознато действие.');
+  const a = ACTIONS[name];
+  const data = body.data && typeof body.data === 'object' ? body.data : {};
+  const ctx = a.auth === 'public' ? null : await auth.authenticate(app, auth.cookieToken(req), a.auth);
+  if (a.perm && !ctx.perms[a.perm]) fail('role', 'Нямате право за това действие.');
+  const result = (await a.fn(data, ctx, app)) || {};
+  return { ctx, result };
+}
+
+async function handleApi(req, env) {
+  const { store, kv } = services(env);
+  const app = makeApp(env, store, kv, req);
+  if (req.method !== 'POST') return json({ ok: false, error: 'method', message: 'Използвайте POST.' }, 405);
+  if (!sameOrigin(req, app)) return json({ ok: false, error: 'origin', message: 'Заявката не е от системата.' }, 403);
+  if (!/^application\/json/.test(req.headers.get('Content-Type') || '')) return json({ ok: false, error: 'bad', message: 'Невалидна заявка.' }, 415);
+  let body;
+  try {
+    const raw = await req.text();
+    if (raw.length > CFG.MAX_BODY) return json({ ok: false, error: 'size', message: 'Данните са твърде големи.' }, 413);
+    body = JSON.parse(raw);
+  } catch (_) {
+    return json({ ok: false, error: 'bad', message: 'Невалидна заявка.' }, 400);
+  }
+  try {
+    const { result } = await dispatch(app, req, body);
+    const headers = {};
+    if ('__cookie' in result) { headers['Set-Cookie'] = cookie(app, result.__cookie); delete result.__cookie; }
+    return json(Object.assign({ ok: true, now: Date.now() }, result), 200, headers);
+  } catch (err) {
+    if (err instanceof AppError) {
+      const headers = err.code === 'session' ? { 'Set-Cookie': cookie(app, '') } : {};
+      return json({ ok: false, error: err.code, message: err.message }, 200, headers);
+    }
+    console.error(err && err.stack || err);
+    return json({ ok: false, error: 'server', message: 'Вътрешна грешка. Опитайте отново.' }, 500);
+  }
+}
+
+/* еднократна настройка: списъците в SharePoint и първият администратор; безопасно е да се повтаря */
+export async function setup(app, d) {
+  if (!app.env.PEPPER || app.env.PEPPER.length < 32) fail('setup', 'Задайте тайната PEPPER (поне 32 знака): wrangler secret put PEPPER');
+  const schema = await app.store.ensureSchema();
+  const all = await app.store.list('users');
+  if (all.some(u => u.role === ROLE_ADMIN)) return { schema, admin: 'вече има администратор' };
+  const username = str(d.username || 'admin', 40).toLowerCase(), email = line(d.email, 200).toLowerCase(), name = line(d.name || 'Администратор', 120);
+  if (!auth.USER_RE.test(username) || !isEmail(email)) fail('value', 'Посочете username и валиден email на първия администратор.');
+  const inv = await auth.newInvite(CFG.INVITE_DAYS * 24);
+  await app.store.insert('users', { username, name, email, role: ROLE_ADMIN, active: 'Да', inviteHash: inv.hash, inviteExp: inv.exp, createdAt: stamp(), createdBy: 'настройка' });
+  await audit(app, 'настройка', 'Първи администратор', username, '');
+  const link = auth.inviteLink(app, username, inv.token);
+  await auth.accessMail(app, email, username, link, CFG.INVITE_DAYS + ' дни');
+  return { schema, admin: username, link };
+}
+
+async function handleSetup(req, env) {
+  const { store, kv } = services(env);
+  const app = makeApp(env, store, kv, req);
+  const key = req.headers.get('X-Setup-Key') || '';
+  if (req.method !== 'POST' || !env.SETUP_KEY || !sameText(key, env.SETUP_KEY)) return json({ ok: false, error: 'forbidden' }, 403);
+  try {
+    let d = {};
+    try { d = await req.json(); } catch (_) { d = {}; }
+    return json(Object.assign({ ok: true }, await setup(app, d)));
+  } catch (err) {
+    console.error(err && err.stack || err);
+    return json({ ok: false, error: err.code || 'server', message: err.message }, 500);
+  }
+}
+
+export default {
+  async fetch(req, env) {
+    const path = new URL(req.url).pathname.replace(/\/+$/, '');
+    if (path === '/api/health') return json({ ok: true, service: 'adm-zdoi', store: env.STORE === 'memory' ? 'memory' : 'sharepoint' });
+    if (path === '/api/setup') return handleSetup(req, env);
+    if (path === '/api') return handleApi(req, env);
+    return json({ ok: false, error: 'notfound' }, 404);
+  },
+  async scheduled(event, env, ctx) {
+    const { store, kv } = services(env);
+    ctx.waitUntil(cases.remindDeadlines(makeApp(env, store, kv, null)).then(r => console.log('напомняния', JSON.stringify(r))));
+  }
+};

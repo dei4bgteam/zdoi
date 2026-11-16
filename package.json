@@ -1,0 +1,12 @@
+{
+  "name": "adm-zdoi",
+  "private": true,
+  "type": "module",
+  "description": "ADM ЗДОИ4You – вътрешна система (Cloudflare Worker + SharePoint)",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "dev": "node tests/dev-server.js",
+    "deploy": "cd worker && npx wrangler deploy"
+  },
+  "engines": { "node": ">=20" }
+}

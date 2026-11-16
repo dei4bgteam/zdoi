@@ -1,0 +1,4 @@
+# копирайте като .dev.vars за wrangler dev (не се качва в Git)
+PEPPER=сменете-с-поне-32-случайни-знака
+SETUP_KEY=сменете
+MS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
