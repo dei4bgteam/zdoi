@@ -26,7 +26,11 @@ export const ACCESS_FORMS = [
   'Копия, предоставени по електронен път, или интернет адрес, на който се съхраняват или са публикувани данните (чл. 26, ал. 1, т. 4)'
 ];
 export const REG_BASIS = ['', 'ЕИК по Търговския закон (Търговски регистър)', 'Код по БУЛСТАТ (Закон за регистър БУЛСТАТ)'];
-export const SENT_HOW = ['', 'Имейл', 'Платформа за достъп (чл. 15в)', 'Сигурно електронно връчване', 'Поща', 'На място'];
+export const SENT_HOW = ['', 'Имейл', 'Платформа за достъп (чл. 15в)', 'Сигурно електронно връчване', 'Поща', 'Куриер', 'На място'];
+/* канали извън имейла от системата: отбелязват се ръчно, с идентификатор и доказателство */
+export const CHANNELS = ['Сигурно електронно връчване', 'Поща', 'На място', 'Платформа за достъп (чл. 15в)', 'Куриер', 'Имейл'];
+export const POST_KINDS = ['Препоръчано с обратна разписка', 'Препоръчано', 'Обикновено', 'С известие за доставяне (куриер)'];
+const PROOF_TYPES = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png' };
 export const DOC_KINDS = ['Заявление', 'Уточнение', 'Писмо'];
 const APPEALABLE = ['Частичен достъп', 'Отказ', 'Без разглеждане', 'Препратено (чл. 32)', 'Няма информация (чл. 33)'];
 
@@ -72,7 +76,7 @@ async function findReq(app, regNo, ctx) {
 const unlocked = r => { if (r.locked === 'Да') fail('caselocked', 'Преписката е заключена от ' + (r.lockedBy || 'администратор') + '.'); };
 const event = (app, regNo, user, kind, text) => app.store.insert('events', { regNo, at: stamp(), user, kind, text: String(text).slice(0, 4000) });
 
-export const reqLists = () => ({ reqStatuses: REQ_STATUS, reqKinds: REQ_KIND, reqModes: REQ_MODE, reqOutcomes: REQ_OUTCOME, accessForms: ACCESS_FORMS, regBasis: REG_BASIS, sentHow: SENT_HOW, docKinds: DOC_KINDS });
+export const reqLists = () => ({ reqStatuses: REQ_STATUS, reqKinds: REQ_KIND, reqModes: REQ_MODE, reqOutcomes: REQ_OUTCOME, accessForms: ACCESS_FORMS, regBasis: REG_BASIS, sentHow: SENT_HOW, docKinds: DOC_KINDS, channels: CHANNELS, postKinds: POST_KINDS });
 
 /* ---------- профил на Сдружението (заявител и бланка) ---------- */
 
@@ -315,20 +319,99 @@ export async function mailSend(d, ctx, app) {
     console.error('mail.send: ' + e.message);
     fail('mail', 'Писмото не е изпратено: ' + e.message.slice(0, 200));
   }
-  const at = stamp(), date = at.slice(0, 10);
+  const at = stamp();
   await app.store.insert('mail', {
-    regNo: r.regNo, direction: 'Изходяща', at, from: mailboxAddress(app.env), to: to.join(', '), cc: cc.join(', '), subject, body: text,
+    regNo: r.regNo, direction: 'Изходяща', channel: 'Имейл', at, from: mailboxAddress(app.env), to: to.join(', '), cc: cc.join(', '), subject, body: text,
     attachments: JSON.stringify(attachments.map(a => ({ name: a.name, size: a.bytes.length }))), docOutNo: docs.map(x => x.outNo).join(', '), by: ctx.username, messageId: 'out:' + r.regNo + ':' + Date.now()
   });
-  for (const doc of docs) await app.store.patch('docs', doc._id, { sentAt: at, sentTo: to.join(', ') });
-  // заявлението и уточнението движат сроковете
-  const patch = { updatedAt: stamp() };
-  if (docs.some(x => x.kind === 'Заявление') && !r.sentAt) Object.assign(patch, { sentAt: date, sentHow: 'Имейл', status: r.status === 'Чернова' ? 'Изпратено' : r.status });
-  if (docs.some(x => x.kind === 'Уточнение')) Object.assign(patch, { clarifySentAt: date, status: 'Уточнено' });
-  await app.store.patch('requests', r._id, patch);
+  await markSent(app, r, docs, at, 'Имейл', to.join(', '));
   await event(app, r.regNo, ctx.username, 'Изходящо писмо', 'До ' + to.join(', ') + ': ' + subject + (docs.length ? ' (приложени: ' + docs.map(x => x.outNo).join(', ') + ')' : ''));
   await audit(app, ctx.username, 'Изпратено писмо', r.regNo, to.join(', '));
   return { sent: true, replyTo };
+}
+
+/* изпратени документи: отбелязва ги и движи сроковете на преписката (заявлението и уточнението) */
+async function markSent(app, r, docs, at, how, to, extra = {}) {
+  const date = at.slice(0, 10);
+  for (const doc of docs) {
+    const desc = how + (to ? ': ' + to : '');
+    await app.store.patch('docs', doc._id, doc.sentAt
+      ? { sentTo: ((doc.sentTo ? doc.sentTo + '; ' : '') + desc).slice(0, 250) }
+      : { sentAt: at, sentHow: how, sentTo: desc.slice(0, 250) });
+  }
+  // сроковете тръгват от първото изпращане; повторното (напр. и по пощата) не ги мести
+  const fresh = docs.filter(x => !x.sentAt);
+  const patch = { updatedAt: stamp() };
+  if (fresh.some(x => x.kind === 'Заявление') && !r.sentAt) Object.assign(patch, { sentAt: date, sentHow: how, status: r.status === 'Чернова' ? 'Изпратено' : r.status });
+  if (docs.some(x => x.kind === 'Заявление')) {
+    // при подаване на място входящият номер е известен веднага; срокът по чл. 28 тече от регистрирането
+    if (extra.entityRegNo && !r.entityRegNo) patch.entityRegNo = extra.entityRegNo;
+    if (extra.entityRegDate && !r.entityRegDate) patch.entityRegDate = extra.entityRegDate;
+  }
+  if (fresh.some(x => x.kind === 'Уточнение')) Object.assign(patch, { clarifySentAt: date, status: 'Уточнено' });
+  await app.store.patch('requests', r._id, patch);
+}
+
+/*
+ * Ръчно отбелязване на кореспонденция извън имейла на системата:
+ *   изходяща – изпратено през ССЕВ, по пощата, подадено лично в деловодството, през платформата и др.;
+ *   входяща – получено писмо или решение по същите канали (сканирано копие се прилага).
+ */
+export async function mailRecord(d, ctx, app) {
+  const r = await findReq(app, d.regNo, ctx);
+  unlocked(r);
+  const out = d.direction !== 'Входяща';
+  const channel = oneOf(d.channel, CHANNELS, 'Начин');
+  const date = isoDate(d.date, 'Дата');
+  if (!date) fail('required', 'Посочете датата.');
+  const today = todayIso();
+  if (date > today) fail('date', 'Датата не може да е в бъдещето.');
+  const ref = line(d.ref, 120), party = line(d.party, 400), note = str(d.note, 8000);
+  const postKind = channel === 'Поща' || channel === 'Куриер' ? oneOf(d.postKind || '', ['', ...POST_KINDS], 'Вид пратка') : '';
+  const entityRegNo = out ? line(d.entityRegNo, 60) : '', entityRegDate = out ? isoDate(d.entityRegDate, 'Вх. дата при субекта') : '';
+  if (entityRegDate && entityRegDate < date) fail('date', 'Входящата дата при субекта не може да е преди изпращането.');
+  if (entityRegDate && entityRegDate > today) fail('date', 'Входящата дата при субекта не може да е в бъдещето.');
+  const docs = [];
+  if (out) {
+    for (const no of (Array.isArray(d.docs) ? d.docs : []).slice(0, 10)) {
+      const doc = (await app.store.list('docs', { outNo: line(no, 30) }))[0];
+      if (!doc || doc.regNo !== r.regNo) fail('value', 'Документът ' + no + ' не е от тази преписка.');
+      docs.push(doc);
+    }
+  }
+  const subject = line(d.subject, 250) || (docs.length ? docs.map(x => x.kind + ' изх. № ' + x.outNo).join(', ') : '');
+  if (!subject) fail('required', 'Посочете относно какво е писмото или изберете документ.');
+
+  // доказателство: обратна разписка, известие от ССЕВ, копие с входящ печат, сканирано писмо
+  const atts = [];
+  if (d.file && d.file.data) {
+    const type = String(d.file.contentType || '');
+    if (!PROOF_TYPES[type]) fail('value', 'Файлът трябва да е PDF, JPG или PNG.');
+    const bytes = fromB64(String(d.file.data));
+    if (bytes.length < 50 || bytes.length > MAX_PDF) fail('size', 'Файлът трябва да е до 8 MB.');
+    let name = line(d.file.name, 120).replace(/[\\/]/g, '_') || (out ? 'доказателство' : 'писмо') + PROOF_TYPES[type];
+    if (!/\.[a-z0-9]{2,4}$/i.test(name)) name += PROOF_TYPES[type];
+    const f = await app.store.uploadFile(r.regNo + '/' + (out ? 'Изходящи' : 'Входящи') + '/' + date + ' ' + name, bytes, type);
+    atts.push({ name, size: bytes.length, contentType: type, fileId: f.id, url: f.webUrl });
+  }
+
+  const at = date === today ? stamp() : date + 'T00:00:00';
+  const who = out ? party || (r.entityName || '') : '';
+  const org = (await orgProfile(app)).name;
+  const body = [postKind, ref ? (channel === 'Сигурно електронно връчване' ? 'Идентификатор в ССЕВ: ' : channel === 'Поща' || channel === 'Куриер' ? '№ на пратката: ' : out ? 'Идентификатор: ' : 'Изх. № на подателя: ') + ref : '',
+    entityRegNo ? 'Вх. № при субекта: ' + entityRegNo + (entityRegDate ? ' от ' + entityRegDate.split('-').reverse().join('.') : '') : '', note].filter(Boolean).join('\n');
+  const rec = await app.store.insert('mail', {
+    regNo: r.regNo, direction: out ? 'Изходяща' : 'Входяща', channel, ref, at, subject, body,
+    from: out ? org : party || (r.entityName || ''), to: out ? who : org, cc: '',
+    attachments: JSON.stringify(atts), docOutNo: docs.map(x => x.outNo).join(', '), by: ctx.username, messageId: 'rec:' + r.regNo + ':' + Date.now()
+  });
+  if (out) await markSent(app, r, docs, at, channel, ref || who, { entityRegNo, entityRegDate });
+  const text = (out ? 'Изпратено (' : 'Получено (') + channel + (postKind ? ', ' + postKind.toLowerCase() : '') + ') на ' + date.split('-').reverse().join('.') + ': ' + subject +
+    (ref ? ' · ' + ref : '') + (entityRegNo ? ' · вх. № ' + entityRegNo : '') + (atts.length ? ' · приложено: ' + atts[0].name : '');
+  await event(app, r.regNo, ctx.username, out ? 'Изходящо писмо' : 'Входящо писмо', text);
+  await audit(app, ctx.username, out ? 'Отбелязано изпращане' : 'Регистрирано получено писмо', r.regNo, channel + (ref ? ' ' + ref : ''));
+  if (!out) await notifyOwner(app, ctx, r, 'Получено писмо (' + channel + '): ' + subject, 'mail');
+  return { id: rec._id };
 }
 
 export async function mailInbox(d, ctx, app) {

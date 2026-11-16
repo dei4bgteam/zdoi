@@ -117,3 +117,54 @@ test('системни процеси: само администратор, пр
   assert.equal(s.mailPoll, false);
   assert.equal((await admin.call('system.save', { org: Object.assign({}, g.org, { eik: '123456789' }) })).error, 'eik');
 });
+
+test('изпращане извън имейла: ССЕВ, поща, лично в деловодството; получено по пощата', async () => {
+  const { admin, box } = await setupReq();
+  const { regNo } = await admin.call('req.create', reqData());
+  const d1 = await admin.call('doc.reserve', { regNo, kind: 'Заявление', payload: { points: ['a'] } });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Sofia' });
+  const past = new Date(Date.now() - 3 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Europe/Sofia' });
+  // проверки
+  assert.equal((await admin.call('mail.record', { regNo, channel: 'Гълъб', date: today, docs: [d1.outNo] })).error, 'value');
+  assert.equal((await admin.call('mail.record', { regNo, channel: 'Поща', date: '2999-01-01', docs: [d1.outNo] })).error, 'date');
+  assert.equal((await admin.call('mail.record', { regNo, channel: 'Поща', date: today })).error, 'required');
+  assert.equal((await admin.call('mail.record', { regNo, channel: 'Поща', date: today, docs: [d1.outNo], file: { name: 'x.exe', contentType: 'application/x-msdownload', data: PDF } })).error, 'value');
+
+  // подадено лично в деловодството преди 3 дни, с вх. № и копие с печат
+  const rec = await admin.call('mail.record', { regNo, channel: 'На място', date: past, docs: [d1.outNo], entityRegNo: 'СОА26-ГР94-77', entityRegDate: past,
+    file: { name: 'копие с печат.pdf', contentType: 'application/pdf', data: PDF } });
+  assert.equal(rec.ok, true);
+  let g = await admin.call('req.get', { regNo });
+  assert.equal(g.request.status, 'Изпратено');
+  assert.equal(g.request.sentAt, past);
+  assert.equal(g.request.sentHow, 'На място');
+  assert.equal(g.request.entityRegNo, 'СОА26-ГР94-77');
+  assert.equal(g.request.entityRegDate, past);
+  assert.ok(g.request.due);
+  assert.equal(g.docs[0].sentHow, 'На място');
+  assert.equal(g.mail[0].channel, 'На място');
+  assert.equal(g.mail[0].attachments[0].name, 'копие с печат.pdf');
+  assert.equal(box.sent.length, 0);
+  // доказателството се сваля
+  const f = await admin.call('mail.attachment', { id: g.mail[0]._id, index: 0 });
+  assert.equal(f.data, PDF);
+  // изпратено и през ССЕВ днес: сроковете не се местят
+  await admin.call('mail.record', { regNo, channel: 'Сигурно електронно връчване', date: today, docs: [d1.outNo], ref: 'a1b2c3' });
+  g = await admin.call('req.get', { regNo });
+  assert.equal(g.request.sentAt, past);
+  assert.match(g.docs[0].sentTo, /На място.*; Сигурно електронно връчване: a1b2c3/);
+  // уточнение по пощата
+  await admin.call('req.update', Object.assign(reqData(), { regNo, status: 'Чака уточняване', sentAt: past, sentHow: 'На място', entityRegNo: 'СОА26-ГР94-77', entityRegDate: past, clarifyAskedAt: today }));
+  const d2 = await admin.call('doc.reserve', { regNo, kind: 'Уточнение', payload: { points: ['b'] } });
+  await admin.call('mail.record', { regNo, channel: 'Поща', postKind: 'Препоръчано с обратна разписка', date: today, docs: [d2.outNo], ref: 'RR123456789BG' });
+  g = await admin.call('req.get', { regNo });
+  assert.equal(g.request.status, 'Уточнено');
+  assert.equal(g.request.clarifySentAt, today);
+  assert.match(g.mail.find(m => m.channel === 'Поща').body, /обратна разписка[\s\S]*RR123456789BG/);
+  // получено решение по пощата
+  const inc = await admin.call('mail.record', { regNo, direction: 'Входяща', channel: 'Поща', date: today, subject: 'Решение № 12', ref: '94-00-1/2026' });
+  assert.equal(inc.ok, true);
+  g = await admin.call('req.get', { regNo });
+  assert.equal(g.mail.find(m => m.direction === 'Входяща').from, 'Столична община');
+  assert.ok(g.events.some(e => e.kind === 'Входящо писмо' && /Решение № 12/.test(e.text)));
+});

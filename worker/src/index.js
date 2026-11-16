@@ -65,12 +65,22 @@ export const ACTIONS = {
   'doc.file': { auth: 'user', perm: 'casesEdit', big: true, fn: reqs.docFile },
   'doc.download': { auth: 'user', fn: reqs.docDownload },
   'mail.send': { auth: 'user', perm: 'casesEdit', fn: reqs.mailSend },
+  'mail.record': { auth: 'user', perm: 'casesEdit', big: true, fn: reqs.mailRecord },
   'mail.inbox': { auth: 'user', fn: reqs.mailInbox },
   'mail.assign': { auth: 'user', perm: 'casesEdit', fn: reqs.mailAssign },
   'mail.attachment': { auth: 'user', fn: reqs.mailAttachment },
   'system.get': { auth: 'admin', fn: reqs.systemGet },
   'system.save': { auth: 'admin', fn: reqs.systemSave },
   'system.poll': { auth: 'admin', fn: reqs.systemPoll },
+  'system.schema': { auth: 'admin', fn: async (d, ctx, app) => {
+    let r;
+    try { r = await app.store.ensureSchema(); } catch (e) {
+      if (e.status === 403) fail('role', 'Приложението може да пише в списъците, но не и да добавя колони (нужно е ниво „manage“ за сайта). Изпълнете „node tools/sp-provision.js“ с администраторски акаунт.');
+      throw e;
+    }
+    await audit(app, ctx.username, 'Обновена структура на базата', '', (r.created || []).join(', ') || 'без промени');
+    return { created: r.created || [] };
+  } },
 
   'users.list': { auth: 'admin', fn: users.usersList },
   'users.save': { auth: 'admin', fn: users.usersSave },

@@ -1034,11 +1034,12 @@ async function requestView(regNo) {
   /* документи */
   const docRows = d.docs.map(x => h('tr', null,
     h('td', { class: 'mono' }, x.outNo), h('td', null, x.kind), h('td', null, fmtDate(x.date)),
-    h('td', null, x.sentAt ? h('span', { class: 'small' }, fmtTime(x.sentAt), h('br'), x.sentTo) : h('span', { class: 'pill' }, 'неизпратен')),
+    h('td', null, x.sentAt ? h('span', { class: 'small' }, whenOf(x.sentAt), h('br'), x.sentTo) : h('span', { class: 'pill' }, 'неизпратен')),
     h('td', null, h('div', { class: 'actions' },
       h('button', { class: 'btn sm', onclick: () => regenerate(x) }, 'PDF'),
       edit && !x.sentAt ? h('button', { class: 'btn sm', onclick: () => docEditor(d, x.kind, x) }, 'Редактирай') : null,
-      edit && x.fileId ? h('button', { class: 'btn sm primary', onclick: () => composeDialog(d, { docs: [x.outNo] }) }, 'Изпрати') : null))));
+      edit && x.fileId ? h('button', { class: 'btn sm primary', onclick: () => composeDialog(d, { docs: [x.outNo] }) }, 'Изпрати по имейл') : null,
+      edit ? h('button', { class: 'btn sm', title: 'ССЕВ, поща, лично в деловодството, платформата по чл. 15в', onclick: () => recordDialog(d, 'Изходяща', [x.outNo]) }, 'Друг начин…') : null))));
   const regenerate = async x => {
     try {
       const p = Object.assign({}, x.payload, { outNo: x.outNo, date: x.date });
@@ -1050,13 +1051,18 @@ async function requestView(regNo) {
     table(['Изх. №', 'Вид', 'Дата', 'Изпратен', ''], docRows, 'Няма документи. Създайте заявлението с „+ Заявление“.'));
 
   /* кореспонденция */
-  const mailCard = h('section', { class: 'card stack' }, h('div', { class: 'head m-0' }, h('h2', null, 'Кореспонденция'), edit ? h('button', { class: 'btn sm', onclick: () => composeDialog(d, {}) }, 'Ново писмо') : null),
+  const mailCard = h('section', { class: 'card stack' }, h('div', { class: 'head m-0' }, h('h2', null, 'Кореспонденция'), edit ? h('div', { class: 'actions' },
+      h('button', { class: 'btn sm', onclick: () => composeDialog(d, {}) }, 'Ново писмо'),
+      h('button', { class: 'btn sm', title: 'Изпратено през ССЕВ, по пощата, лично в деловодството…', onclick: () => recordDialog(d, 'Изходяща', []) }, 'Отбележи изпратено'),
+      h('button', { class: 'btn sm', title: 'Получено по пощата, през ССЕВ, на ръка…', onclick: () => recordDialog(d, 'Входяща', []) }, 'Регистрирай получено')) : null),
     d.mail.length ? h('div', { class: 'stack' }, d.mail.map(m => h('div', { class: 'msg' + (m.direction === 'Изходяща' ? ' op' : '') },
-      h('div', { class: 'small muted' }, h('span', { class: 'pill ' + (m.direction === 'Входяща' ? 'info' : '') }, m.direction), ' ', fmtTime(m.at), ' · ', m.direction === 'Входяща' ? 'от ' + m.from : 'до ' + m.to, m.matched ? ' · разпределено: ' + m.matched : ''),
+      h('div', { class: 'small muted' }, h('span', { class: 'pill ' + (m.direction === 'Входяща' ? 'info' : '') }, m.direction), ' ',
+        chanOf(m) ? [h('span', { class: 'pill warn' }, chanOf(m)), ' '] : null,
+        whenOf(m.at), ' · ', m.direction === 'Входяща' ? 'от ' + m.from : 'до ' + m.to, m.ref ? ' · ' + m.ref : '', m.docOutNo ? ' · ' + m.docOutNo : '', m.matched ? ' · разпределено: ' + m.matched : ''),
       h('div', null, h('b', null, m.subject || '(без тема)')),
       h('details', null, h('summary', { class: 'small' }, 'Текст'), h('div', { class: 'pre small' }, m.body)),
       m.attachments.length ? h('div', { class: 'attach-chips' }, m.attachments.map((a, i) => a.fileId ? h('button', { class: 'btn sm', onclick: async () => { try { const f = await api('mail.attachment', { id: m._id, index: i }); downloadB64(f.name, f.data, f.contentType); } catch (e) { toast(e.message); } } }, '📎 ' + a.name) : h('span', { class: 'small muted' }, '📎 ' + a.name + (a.skipped ? ' (' + a.skipped + ')' : '')))) : null,
-      edit && m.direction === 'Входяща' ? h('div', { class: 'actions mt-8' }, h('button', { class: 'btn sm', onclick: () => composeDialog(d, { reply: m }) }, 'Отговори')) : null))) : h('p', { class: 'empty' }, 'Няма писма.'));
+      edit && m.direction === 'Входяща' && (!m.channel || m.channel === 'Имейл') ? h('div', { class: 'actions mt-8' }, h('button', { class: 'btn sm', onclick: () => composeDialog(d, { reply: m }) }, 'Отговори')) : null))) : h('p', { class: 'empty' }, 'Няма писма.'));
 
   const comment = h('form', null, field({ k: 'text', label: 'Вътрешен коментар', type: 'textarea', rows: 2, max: 4000, req: true, full: true }), h('div', { class: 'actions mt-8' }, h('button', { type: 'submit', class: 'btn sm primary' }, 'Добави')));
   onSubmit(comment, async v => { await api('req.comment', { regNo: r.regNo, text: v.text }); toast('Добавено.'); reload(); });
@@ -1075,7 +1081,7 @@ async function requestView(regNo) {
           ['Вид', r.kind], ['Предмет', r.title],
           ['Задължен субект', [ent.name, ent.eik ? capital(Docs.idLabel(ent.regBasis)) + ' ' + ent.eik : '', ent.address, ent.email].filter(Boolean).join(' · ')],
           ['Заявител', r.mode === 'Клиент' ? [ap.name, ap.eik ? capital(Docs.idLabel(ap.regBasis)) + ' ' + ap.eik : '', ap.address, ap.email].filter(Boolean).join(' · ') + ' (чрез ЗДОИ4You като пълномощник)' : boot.org.name + ' (ЗДОИ4You)'],
-          ['Изх. № на заявлението', r.outNo], ['Изпратено', r.sentAt ? fmtDate(r.sentAt) + (r.sentHow ? ' – ' + r.sentHow : '') : ''],
+          ['Изх. № на заявлението', r.outNo], ['Изпратено', r.sentAt ? fmtDate(r.sentAt) + (r.sentHow ? ' – ' + (r.sentHow === 'На място' ? 'лично в деловодството' : r.sentHow) : '') : ''],
           ['Вх. № при субекта', r.entityRegNo ? r.entityRegNo + (r.entityRegDate ? ' от ' + fmtDate(r.entityRegDate) : '') : ''],
           ['Уточняване', r.clarifyAskedAt ? 'поискано ' + fmtDate(r.clarifyAskedAt) + (r.clarifySentAt ? ', изпратено ' + fmtDate(r.clarifySentAt) : '') : ''],
           ['Решение', r.decisionNo ? '№ ' + r.decisionNo + (r.decisionDate ? ' от ' + fmtDate(r.decisionDate) : '') : ''], ['Резултат', r.outcome],
@@ -1183,6 +1189,86 @@ function composeDialog(d, { docs = [], reply = null } = {}) {
   }, { wide: true, extra: h('div', { class: 'stack mt-12' }, docBoxes, h('p', { class: 'note' }, 'Изпраща се от ' + d.mailbox + ' с адрес за отговор ' + d.replyTo + '. Копие остава в „Изпратени“ на приемната.')) });
 }
 
+/* ---------- изпращане и получаване извън имейла: ССЕВ, поща, лично в деловодството ---------- */
+
+const CHANNEL_SHORT = { 'Сигурно електронно връчване': 'ССЕВ', 'Поща': 'Поща', 'Куриер': 'Куриер', 'На място': 'Лично в деловодството', 'Платформа за достъп (чл. 15в)': 'Платформа', 'Имейл': 'Имейл (друг адрес)' };
+const CHANNEL_LABEL = { 'На място': 'Лично в деловодството (на място)', 'Имейл': 'Имейл от друг адрес (не през системата)', 'Сигурно електронно връчване': 'ССЕВ – Система за сигурно електронно връчване' };
+/* въведените ръчно записи имат само дата (без час) */
+const whenOf = iso => /T00:00:00$/.test(iso || '') ? fmtDate(iso) : fmtTime(iso);
+/* каналът на записа; празно за обикновен имейл през системата */
+const chanOf = m => (!m.channel || (m.channel === 'Имейл' && !String(m.messageId || '').startsWith('rec:'))) ? '' : CHANNEL_SHORT[m.channel] || m.channel;
+
+function readFile64(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result).replace(/^data:[^,]*,/, ''));
+    fr.onerror = () => rej(new Error('Файлът не може да се прочете.'));
+    fr.readAsDataURL(file);
+  });
+}
+
+function recordDialog(d, direction, docs) {
+  const r = d.request, out = direction === 'Изходяща', ent = r.entity || {};
+  const refLabel = {
+    'Сигурно електронно връчване': ['Идентификатор на съобщението в ССЕВ', 'От потвърждението в edelivery.egov.bg.'],
+    'Поща': ['№ на пратката', 'Баркод от разписката, напр. RR123456789BG.'],
+    'Куриер': ['№ на товарителницата', ''],
+    'На място': [out ? 'Име на служителя, приел документа' : 'Изх. № на писмото', ''],
+    'Платформа за достъп (чл. 15в)': [out ? '№ на заявлението в платформата' : '№ в платформата', ''],
+    'Имейл': [out ? 'Изпратено от адрес' : 'Изх. № на писмото', '']
+  };
+  const chSel = field({ k: 'channel', label: out ? 'Начин на изпращане' : 'Получено чрез', type: 'select', req: true, options: boot.lists.channels.map(c => [c, CHANNEL_LABEL[c] || c]) }, out ? 'Сигурно електронно връчване' : 'Поща');
+  const postSel = field({ k: 'postKind', label: 'Вид пратка', type: 'select', options: boot.lists.postKinds }, boot.lists.postKinds[0]);
+  const refField = field({ k: 'ref', label: '', max: 120 });
+  const regNo = out ? field({ k: 'entityRegNo', label: 'Вх. № при субекта', max: 60 }) : null;
+  const regDate = out ? field({ k: 'entityRegDate', label: 'Вх. дата при субекта', type: 'date', hint: 'Срокът по чл. 28 ЗДОИ тече от регистрирането.' }) : null;
+  const fileIn = h('input', { type: 'file', accept: 'application/pdf,image/jpeg,image/png' });
+  const all = d.docs;
+  const docBoxes = out && all.length ? h('div', { class: 'field full' }, h('span', null, 'Изпратени документи'),
+    all.map(x => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'doc_' + x.outNo, checked: docs.includes(x.outNo) }),
+      h('span', null, x.outNo + ' – ' + x.kind + (x.sentAt ? ' (вече изпратен ' + whenOf(x.sentAt) + ' – ' + (x.sentHow || '') + ')' : ''))))) : null;
+  const form = h('form', null,
+    h('div', { class: 'form-grid' },
+      chSel, field({ k: 'date', label: out ? 'Дата на изпращане / подаване' : 'Дата на получаване', type: 'date', req: true, maxValue: todayIso() }, todayIso()),
+      postSel, refField, regNo, regDate,
+      field({ k: 'party', label: out ? 'Адресат' : 'Подател', max: 400, full: true, hint: out ? 'Наименование и адрес, ако е по пощата.' : '' },
+        out ? [ent.name, ent.address].filter(Boolean).join(', ') : ent.name || ''),
+      field({ k: 'subject', label: 'Относно', max: 250, full: true, req: !out, hint: out ? 'Ако е празно – видът и Изх. № на избраните документи.' : 'Напр. „Решение № 12 от 10.11.2026 г.“ или „Искане за уточняване“.' }),
+      field({ k: 'note', label: 'Бележка', type: 'textarea', rows: 2, max: 8000, full: true }),
+      docBoxes,
+      h('label', { class: 'field full' }, h('span', null, out ? 'Доказателство (по желание)' : 'Сканирано писмо (по желание)'), fileIn,
+        h('small', null, out ? 'Обратна разписка, потвърждение от ССЕВ, копие с входящ печат – PDF, JPG или PNG до 8 MB.' : 'PDF, JPG или PNG до 8 MB.'))),
+    h('p', { class: 'note' }, out ? 'Отбелязаното заявление или уточнение става „изпратено“ и сроковете тръгват от посочената дата. Ако документът вече е изпратен (напр. и по имейл), сроковете не се местят.'
+      : 'Писмото се записва в кореспонденцията на преписката. Решение, искане за уточняване или удължаване на срока въведете и в „Ход и решение“.'),
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn', onclick: () => dlg.close() }, 'Отказ'), h('button', { type: 'submit', class: 'btn primary' }, 'Запиши')));
+  const sync = () => {
+    const ch = form.elements.channel.value, [lab, hint] = refLabel[ch] || ['Идентификатор', ''];
+    refField.querySelector('span').textContent = lab;
+    const sm = refField.querySelector('small') || refField.appendChild(h('small'));
+    sm.textContent = hint;
+    postSel.hidden = !(ch === 'Поща' || ch === 'Куриер');
+    form.elements.postKind.disabled = postSel.hidden;
+  };
+  form.elements.channel.addEventListener('change', sync);
+  sync();
+  const dlg = dialog((out ? 'Отбелязване на изпращане – ' : 'Получено писмо – ') + r.regNo, form, { wide: true });
+  onSubmit(form, async v => {
+    const chosen = all.filter(x => form.elements['doc_' + x.outNo] && form.elements['doc_' + x.outNo].checked).map(x => x.outNo);
+    if (out && !chosen.length && !v.subject) throw new Error('Изберете документ или попълнете „Относно“.');
+    let file = null;
+    const f = fileIn.files[0];
+    if (f) {
+      if (f.size > 8 * 1048576) throw new Error('Файлът е по-голям от 8 MB.');
+      file = { name: f.name, contentType: f.type, data: await readFile64(f) };
+    }
+    await api('mail.record', { regNo: r.regNo, direction, channel: v.channel, date: v.date, postKind: v.postKind || '', ref: v.ref, party: v.party, subject: v.subject, note: v.note,
+      entityRegNo: v.entityRegNo || '', entityRegDate: v.entityRegDate || '', docs: chosen, file });
+    toast(out ? 'Изпращането е отбелязано.' : 'Писмото е регистрирано.');
+    dlg.close();
+    requestView(r.regNo);
+  });
+}
+
 /* ---------- досие за съда ---------- */
 
 const generated = () => ({ generatedAt: new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Sofia' }).replace(' ', 'T'), generatedBy: me.name + ' (' + me.username + ')' });
@@ -1200,7 +1286,7 @@ async function reqDossier(d) {
         { heading: 'Искана информация', table: { head: ['№', 'Точка'], rows: r.points.map((p, i) => [i + 1, p]), widths: [20, '*'] } },
         r.motives ? { heading: 'Мотиви', text: r.motives } : null,
         { heading: 'Ход и срокове', kv: [
-          ['Статус', r.status], ['Изх. № на заявлението', r.outNo], ['Изпратено', r.sentAt ? fmtDate(r.sentAt) + (r.sentHow ? ' – ' + r.sentHow : '') : ''],
+          ['Статус', r.status], ['Изх. № на заявлението', r.outNo], ['Изпратено', r.sentAt ? fmtDate(r.sentAt) + (r.sentHow ? ' – ' + (r.sentHow === 'На място' ? 'лично в деловодството' : r.sentHow) : '') : ''],
           ['Вх. № при субекта', r.entityRegNo ? r.entityRegNo + (r.entityRegDate ? ' от ' + fmtDate(r.entityRegDate) : '') : ''],
           ['Поискано уточняване', fmtDate(r.clarifyAskedAt)], ['Изпратено уточнение', fmtDate(r.clarifySentAt)],
           ['Удължаване', [r.ext30 ? 'чл. 30: ' + r.ext30 + ' дни' : '', r.ext31 ? 'чл. 31: ' + r.ext31 + ' дни' : ''].filter(Boolean).join('; ')],
@@ -1209,9 +1295,9 @@ async function reqDossier(d) {
           ['Решение', r.decisionNo ? '№ ' + r.decisionNo + ' от ' + fmtDate(r.decisionDate) : ''], ['Резултат', r.outcome],
           ['Решението е получено (връчено) на', fmtDate(r.servedAt)], ['Срок за обжалване', r.appealBy ? fmtDate(r.appealBy) : ''],
           ['Обжалвано', r.appealed === 'Да' ? 'Да' + (r.appealNote ? ' – ' + r.appealNote : '') : 'Не']] },
-        { heading: 'Документи', table: { head: ['Изх. №', 'Вид', 'Дата', 'Изпратен на', 'До'], rows: d.docs.slice().reverse().map(x => [x.outNo, x.kind, fmtDate(x.date), fmtTime(x.sentAt), x.sentTo]), widths: [80, 60, 55, 80, '*'] } },
-        { heading: 'Кореспонденция (връчвания и отговори)', blocks: d.mail.slice().reverse().map(m => ({
-          head: `${m.direction} · ${fmtTime(m.at)} · ${m.direction === 'Входяща' ? 'от ' + m.from + ' до ' + m.to : 'от ' + m.from + ' до ' + m.to} · ${m.subject}`,
+        { heading: 'Документи', table: { head: ['Изх. №', 'Вид', 'Дата', 'Изпратен на', 'Начин и получател'], rows: d.docs.slice().reverse().map(x => [x.outNo, x.kind, fmtDate(x.date), x.sentAt ? whenOf(x.sentAt) : 'неизпратен', x.sentTo || '']), widths: [80, 60, 55, 70, '*'] } },
+        { heading: 'Кореспонденция (връчвания и отговори)', blocks: d.mail.slice().sort((a, b) => String(a.at).localeCompare(String(b.at))).map(m => ({
+          head: `${m.direction} · ${chanOf(m) || 'Имейл'} · ${whenOf(m.at)} · от ${m.from} до ${m.to}${m.ref ? ' · ' + m.ref : ''} · ${m.subject}`,
           text: (m.body || '').slice(0, 6000) + (m.attachments.length ? '\nПрикачени: ' + m.attachments.map(a => a.name).join(', ') : '') + (m.docOutNo ? '\nДокументи: ' + m.docOutNo : '') })) },
         { heading: 'Съдебни дела', table: { head: ['Съд', 'Дело', 'Вид', 'Статус', 'Заседание'], rows: d.courts.map(x => [x.court, x.caseNo + '/' + x.year, x.kind, x.status, fmtDate(x.nextHearing)]), widths: ['*', 50, 90, 70, 60] } },
         { heading: 'История', table: { head: ['Време', 'Потребител', 'Действие', 'Описание'], rows: d.events.slice().reverse().map(e => [fmtTime(e.at), e.user, e.kind, e.text]), widths: [70, 60, 70, '*'] } }
@@ -1301,7 +1387,11 @@ async function systemView() {
         ['Напомняния за срокове', 'всеки ден след 8:00 ч. (днес: ' + s.lastReminder + ')']])),
       h('section', { class: 'card stack' }, h('h2', null, 'Данни и достъп'), kv([
         ['База данни', 'SharePoint – списъци „ADM …“, файлове в „Документи/ADM“'], ['Потребители', 'меню „Потребители“'], ['Дневник', 'меню „Дневник“']]),
-        h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/users' }, 'Потребители'), h('a', { class: 'btn', href: '#/log' }, 'Дневник'), h('a', { class: 'btn', href: '#/departments' }, 'Отдели'))))));
+        h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/users' }, 'Потребители'), h('a', { class: 'btn', href: '#/log' }, 'Дневник'), h('a', { class: 'btn', href: '#/departments' }, 'Отдели'),
+          h('button', { class: 'btn', title: 'Добавя в SharePoint липсващите списъци и колони след обновяване на системата', onclick: async e => {
+            e.target.disabled = true;
+            try { const r = await api('system.schema'); toast(r.created.length ? 'Добавени: ' + r.created.join(', ') : 'Структурата е актуална.'); } catch (ex) { toast(ex.message); } finally { e.target.disabled = false; }
+          } }, 'Обнови структурата на базата'))))));
   enhanceParty(orgForm);
 }
 

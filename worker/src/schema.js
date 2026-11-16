@@ -50,11 +50,12 @@ export const SCHEMA = {
   }, r => r.regNo + ' ' + (r.entityName || '')],
   docs: ['ADM Документи', {
     outNo: ['Изх. №', 'index'], regNo: ['Преписка', 'index'], kind: ['Вид'], date: ['Дата'], title: ['Заглавие'],
-    payload: ['Съдържание (JSON)', 'long'], fileId: ['Файл (ID)'], fileUrl: ['Файл'], sentAt: ['Изпратен на'], sentTo: ['Изпратен до'], by: ['Създал'], at: ['Създаден']
+    payload: ['Съдържание (JSON)', 'long'], fileId: ['Файл (ID)'], fileUrl: ['Файл'], sentAt: ['Изпратен на'], sentHow: ['Изпратен чрез'], sentTo: ['Изпратен до'], by: ['Създал'], at: ['Създаден']
   }, r => r.outNo + ' ' + r.kind],
   mail: ['ADM Кореспонденция', {
     regNo: ['Преписка', 'index'], messageId: ['Message-ID', 'index'], direction: ['Посока'], at: ['Време'], from: ['От'], to: ['До', 'long'], cc: ['Копие', 'long'],
-    subject: ['Тема'], body: ['Текст', 'long'], graphId: ['ID в пощата', 'long'], attachments: ['Прикачени (JSON)', 'long'], docOutNo: ['Документ'], by: ['Изпратил'], matched: ['Разпределено по']
+    subject: ['Тема'], body: ['Текст', 'long'], graphId: ['ID в пощата', 'long'], attachments: ['Прикачени (JSON)', 'long'], docOutNo: ['Документ'], by: ['Изпратил'], matched: ['Разпределено по'],
+    channel: ['Канал'], ref: ['Идентификатор (ССЕВ, № на пратка, вх. №)']
   }, r => (r.direction || '') + ' ' + (r.subject || '')],
   addressees: ['ADM Адресати', {
     type: ['Вид'], name: ['Име или наименование'], regBasis: ['Регистрация'], eik: ['ЕИК/БУЛСТАТ'],
