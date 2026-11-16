@@ -61,11 +61,14 @@ function statusPill(s) {
 let me = null, boot = null, expAt = 0, timerId = null;
 
 async function api(action, data) {
-  let res;
+  let r, res;
   try {
-    const r = await fetch(API, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, data: data || {} }) });
-    res = await r.json();
+    r = await fetch(API, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, data: data || {} }) });
   } catch (e) { throw new Error('Няма връзка със сървъра. Проверете интернет връзката и опитайте отново.'); }
+  try { res = await r.json(); } catch (e) {
+    // отговорът не е от системата: сървърът (Worker) не е публикуван или е недостъпен
+    throw new Error('Сървърът на системата не отговаря (код ' + r.status + '). Опитайте по-късно или пишете на поддръжката.');
+  }
   if (res.ok) {
     if (me) expAt = Date.now() + SESSION_MIN * 6e4;
     return res;
