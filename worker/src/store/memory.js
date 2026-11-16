@@ -45,6 +45,19 @@ export class MemoryStore {
   }
 
   async ensureSchema() { return { created: [] }; }
+
+  async uploadFile(path, bytes, contentType) {
+    this.files = this.files || new Map();
+    const id = 'f' + (++this.seq);
+    this.files.set(id, { path, bytes: new Uint8Array(bytes), contentType });
+    return { id, webUrl: 'memory://ADM/' + path, name: path.split('/').pop(), size: bytes.length };
+  }
+
+  async downloadFile(id) {
+    const f = this.files && this.files.get(id);
+    if (!f) throw new Error('missing file ' + id);
+    return f.bytes;
+  }
 }
 
 /* ключ-стойност с изтичане – заместител на Workers KV */

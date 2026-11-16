@@ -19,8 +19,15 @@ const ORIGIN = 'http://127.0.0.1:' + PORT;
 const SITE = fileURLToPath(new URL('../site/', import.meta.url));
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.ico': 'image/x-icon', '.txt': 'text/plain' };
 
+/* пощенска кутия на приемната в паметта: изпратените се печатат, а входящите се добавят от seed() */
+const mailbox = {
+  sent: [], inbox: [],
+  async send(m) { this.sent.push(m); console.log('📤 ' + m.to.join(', ') + ' – ' + m.subject + ' (отговор до ' + m.replyTo + ', приложения: ' + m.attachments.map(a => a.name).join(', ') + ')'); return {}; },
+  async fetchSince(since) { return this.inbox.filter(x => x.at >= since); }
+};
+
 const env = {
-  APP_URL: ORIGIN + '/', PEPPER: 'dev-pepper-'.padEnd(48, 'x'), SETUP_KEY: 'dev',
+  APP_URL: ORIGIN + '/', PEPPER: 'dev-pepper-'.padEnd(48, 'x'), SETUP_KEY: 'dev', MAILBOX: 'priemna@zdoi.eu', __mailbox: mailbox,
   __store: new MemoryStore(), __kv: new MemoryKV(),
   __mailer: async (to, subject, text) => console.log('\n✉  ' + to + ' – ' + subject + '\n' + text.split('\n').map(l => '   ' + l).join('\n'))
 };
@@ -45,6 +52,17 @@ async function seed() {
   await caseCreate(Object.assign({}, base, { regDate: day(20), applicantName: 'Иван Петров', applicantEmail: 'ivan@example.org', subject: 'Договори за почистване за 2025 г.', owner: 'admin' }), ctx, app);
   await caseCreate(Object.assign({}, base, { regDate: day(12), applicantName: 'Сдружение „Прозрачност“', applicantType: 'Неправителствена организация', applicantEmail: 'office@example.org', subject: 'Разходи за реклама', owner: 'admin' }), ctx, app);
   const { regNo } = await caseCreate(Object.assign({}, base, { regDate: day(2), applicantName: 'Мария Георгиева', applicantAddress: 'гр. София, ул. Шипка 1', subject: 'Протоколи от общински съвет' }), ctx, app);
+  const { reqCreate, pollMail } = await import('../worker/src/requests.js');
+  const r1 = await reqCreate({ mode: 'Сдружението', title: 'Договори за сметопочистване', owner: 'admin',
+    entity: { name: 'Столична община', regBasis: 'Код по БУЛСТАТ (Закон за регистър БУЛСТАТ)', eik: '000696327', address: 'п.к. 1000, гр. София, ул. Московска 33', email: 'zdoi@sofia.example' },
+    points: ['Копия на договорите за сметопочистване, сключени през 2025 г.', 'Анексите към тях и протоколите за приемане на работата'],
+    motives: 'Информацията е от значим обществен интерес.', access: ['Копия, предоставени по електронен път, или интернет адрес, на който се съхраняват или са публикувани данните (чл. 26, ал. 1, т. 4)'] }, ctx, app);
+  await reqCreate({ mode: 'Клиент', title: 'Разрешения за строеж', applicant: { type: 'Гражданин', name: 'Петър Стоянов', address: 'п.к. 4000, гр. Пловдив', email: 'petar@example.org' },
+    entity: { name: 'Община Пловдив', regBasis: 'Код по БУЛСТАТ (Закон за регистър БУЛСТАТ)', email: 'zdoi@plovdiv.example' }, points: ['Списък на издадените разрешения за строеж през 2025 г.'] }, ctx, app);
+  mailbox.inbox.push({ graphId: 'g1', messageId: '<dev1@x>', at: new Date().toISOString(), from: 'zdoi@sofia.example', fromName: 'Деловодство', to: ['priemna+p' + r1.regNo.slice(2) + '@zdoi.eu'], cc: [],
+    subject: 'Вх. № СОА26-ГР94-1234 – регистрирано заявление', body: 'Уважаеми господин/госпожо, Вашето заявление е регистрирано с вх. № СОА26-ГР94-1234.', attachments: [] });
+  mailbox.inbox.push({ graphId: 'g2', messageId: '<dev2@x>', at: new Date().toISOString(), from: 'someone@example.org', fromName: '', to: ['priemna@zdoi.eu'], cc: [], subject: 'Въпрос', body: 'Здравейте', attachments: [] });
+  await pollMail(app, { manual: true });
   await courtSave({ regNo, court: 'Административен съд – София-град', caseNo: '4521', year: String(new Date().getFullYear()), kind: 'Жалба срещу мълчалив отказ', instance: 'Административен съд', status: 'Насрочено', nextHearing: day(-10) }, ctx, app);
 }
 

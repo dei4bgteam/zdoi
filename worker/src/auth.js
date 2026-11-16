@@ -56,7 +56,7 @@ export function permsOf(u) {
 export function notifyOf(u) {
   let n = {};
   try { n = JSON.parse(u.notify || '{}') || {}; } catch (_) { n = {}; }
-  return { assign: n.assign !== false, deadline: n.deadline !== false, status: !!n.status, comments: !!n.comments, all: !!n.all };
+  return { assign: n.assign !== false, deadline: n.deadline !== false, mail: n.mail !== false, status: !!n.status, comments: !!n.comments, all: !!n.all };
 }
 
 const meInfo = u => ({
@@ -289,7 +289,7 @@ export async function twofaConfirm(d, ctx, app) {
 
 export async function notifySave(d, ctx, app) {
   const u = await findUser(app, ctx.username);
-  const n = { assign: d.assign !== false, deadline: d.deadline !== false, status: !!d.status, comments: !!d.comments, all: !!d.all && !!ctx.perms.casesAll };
+  const n = { assign: d.assign !== false, deadline: d.deadline !== false, mail: d.mail !== false, status: !!d.status, comments: !!d.comments, all: !!d.all && !!ctx.perms.casesAll };
   await app.store.patch('users', u._id, { notify: JSON.stringify(n) });
   await dropUser(app, ctx.username);
   return { notify: n };

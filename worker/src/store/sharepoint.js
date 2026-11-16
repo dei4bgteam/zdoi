@@ -4,7 +4,7 @@
  */
 
 import { SCHEMA, colName, toFields, readCell } from '../schema.js';
-import { graph, GraphError } from '../graph.js';
+import { graph, graphBytes, GraphError } from '../graph.js';
 
 const PREFER = { Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' };
 const ids = { site: null, lists: null };
@@ -95,6 +95,17 @@ export class SharePointStore {
 
   async remove(table, id) {
     await graph(this.env, 'DELETE', (await this.base(table)) + '/items/' + encodeURIComponent(id));
+  }
+
+  /* файлове в библиотеката „Документи“ на сайта, папка ADM/… */
+  async uploadFile(path, bytes, contentType) {
+    const clean = path.split('/').map(p => p.replace(/[\\:*?"<>|#%]/g, '_').trim()).filter(Boolean).map(encodeURIComponent).join('/');
+    const r = await graphBytes(this.env, 'PUT', '/sites/' + (await this.siteId()) + '/drive/root:/ADM/' + clean + ':/content?@microsoft.graph.conflictBehavior=rename', bytes, contentType || 'application/octet-stream');
+    return { id: r.id, webUrl: r.webUrl, name: r.name, size: r.size };
+  }
+
+  async downloadFile(id) {
+    return graphBytes(this.env, 'GET', '/sites/' + (await this.siteId()) + '/drive/items/' + encodeURIComponent(id) + '/content');
   }
 
   /* създава липсващите списъци и колони; изпълнява се при настройката и е безопасно да се повтаря */

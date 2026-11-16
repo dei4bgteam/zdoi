@@ -10,6 +10,7 @@ export const CFG = {
   FAIL_WINDOW_S: 900,
   CODE_MIN: 5,
   MAX_BODY: 300000,
+  MAX_BIG_BODY: 12 * 1048576,
   MAINTAINER: 'Вътрешна система на ЗДОИ4You.'
 };
 

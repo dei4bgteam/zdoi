@@ -110,9 +110,9 @@ test('потребители: само администратор; поне ед
 test('преписки: номер, срок, промяна, история', async () => {
   const { admin } = await ready();
   const r = await admin.call('case.create', caseData());
-  assert.equal(r.regNo, 'ЗДОИ-2026-0001');
-  assert.equal((await admin.call('case.create', caseData())).regNo, 'ЗДОИ-2026-0002');
-  assert.equal((await admin.call('case.create', caseData({ regNo: 'ЗДОИ-2026-0001' }))).error, 'duplicate');
+  assert.equal(r.regNo, 'ВХ-2026-0001');
+  assert.equal((await admin.call('case.create', caseData())).regNo, 'ВХ-2026-0002');
+  assert.equal((await admin.call('case.create', caseData({ regNo: 'ВХ-2026-0001' }))).error, 'duplicate');
   assert.equal((await admin.call('case.create', caseData({ subject: '' }))).error, 'required');
   const got = await admin.call('case.get', { regNo: r.regNo });
   assert.equal(got.case.due, '2026-11-16');
@@ -166,6 +166,6 @@ test('напомняния за срокове – веднъж на ден', as
   const app = makeApp(env, env.__store, env.__kv, null);
   const r = await remindDeadlines(app, new Date('2026-11-13T09:00:00+02:00')); // 3 дни до 16.11
   assert.equal(r.sent, 1);
-  assert.ok(/ЗДОИ-2026-0001/.test(outbox.pop().text));
+  assert.ok(/ВХ-2026-0001/.test(outbox.pop().text));
   assert.equal((await remindDeadlines(app, new Date('2026-11-13T10:00:00+02:00'))).skipped, 'вече изпратено');
 });

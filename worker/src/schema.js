@@ -36,8 +36,28 @@ export const SCHEMA = {
     kind: ['Вид'], instance: ['Инстанция'], status: ['Статус'], nextHearing: ['Следващо заседание'], result: ['Резултат'],
     note: ['Бележки', 'long'], by: ['Въвел'], at: ['Въведено'], updatedAt: ['Променено']
   }, r => r.court + ' ' + r.caseNo + '/' + r.year],
+  requests: ['ADM Заявления', {
+    regNo: ['№ на преписка', 'index'], tag: ['Пощенски етикет', 'index'], createdAt: ['Създадена'], createdBy: ['Създал'], updatedAt: ['Променена'],
+    kind: ['Вид'], status: ['Статус'], owner: ['Отговорник'], title: ['Предмет'],
+    mode: ['Заявител от името на'], applicant: ['Заявител (JSON)', 'long'], applicantName: ['Заявител'],
+    entityId: ['Адресат (ID)'], entity: ['Задължен субект (JSON)', 'long'], entityName: ['Задължен субект'], entityEmail: ['Имейл на субекта'],
+    points: ['Искана информация (JSON)', 'long'], motives: ['Мотиви', 'long'], access: ['Форма на достъп (JSON)'], noPublish: ['Несъгласие с публикуване'],
+    sentAt: ['Изпратено на'], sentHow: ['Начин на изпращане'], outNo: ['Изх. № на заявлението'], entityRegNo: ['Вх. № при субекта'], entityRegDate: ['Вх. дата при субекта'],
+    clarifyAskedAt: ['Поискано уточняване'], clarifySentAt: ['Изпратено уточнение'], ext30: ['Удължаване чл. 30 (дни)'], ext31: ['Удължаване чл. 31 (дни)'],
+    decisionNo: ['Решение №'], decisionDate: ['Дата на решението'], outcome: ['Резултат'], servedAt: ['Получено решение на'],
+    appealed: ['Обжалвано'], appealNote: ['Бележка за обжалването', 'long'], notes: ['Бележки', 'long'],
+    locked: ['Заключена'], lockedBy: ['Заключил'], lockedAt: ['Заключена на']
+  }, r => r.regNo + ' ' + (r.entityName || '')],
+  docs: ['ADM Документи', {
+    outNo: ['Изх. №', 'index'], regNo: ['Преписка', 'index'], kind: ['Вид'], date: ['Дата'], title: ['Заглавие'],
+    payload: ['Съдържание (JSON)', 'long'], fileId: ['Файл (ID)'], fileUrl: ['Файл'], sentAt: ['Изпратен на'], sentTo: ['Изпратен до'], by: ['Създал'], at: ['Създаден']
+  }, r => r.outNo + ' ' + r.kind],
+  mail: ['ADM Кореспонденция', {
+    regNo: ['Преписка', 'index'], messageId: ['Message-ID', 'index'], direction: ['Посока'], at: ['Време'], from: ['От'], to: ['До', 'long'], cc: ['Копие', 'long'],
+    subject: ['Тема'], body: ['Текст', 'long'], graphId: ['ID в пощата', 'long'], attachments: ['Прикачени (JSON)', 'long'], docOutNo: ['Документ'], by: ['Изпратил'], matched: ['Разпределено по']
+  }, r => (r.direction || '') + ' ' + (r.subject || '')],
   addressees: ['ADM Адресати', {
-    type: ['Вид'], name: ['Име или наименование'], eik: ['ЕИК/БУЛСТАТ'],
+    type: ['Вид'], name: ['Име или наименование'], regBasis: ['Регистрация'], eik: ['ЕИК/БУЛСТАТ'],
     seat: ['Седалище'], address: ['Адрес', 'long'], oblast: ['Област'], email: ['Имейл'], phone: ['Телефон'], by: ['Въвел'], at: ['Въведен']
   }, r => r.name],
   departments: ['ADM Отдели', {

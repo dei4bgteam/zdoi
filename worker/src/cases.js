@@ -9,13 +9,15 @@ import { audit, mail, insertUnique } from './core.js';
 import { SCHEMA } from './schema.js';
 import { notifyOf, permsOf } from './auth.js';
 import { usersBrief } from './users.js';
+import { reqLists, reqDashboard, orgProfile, REG_BASIS } from './requests.js';
+import { mailboxAddress } from './mailbox.js';
 
 export const CASE_STATUS = ['Нова', 'В обработка', 'Чака уточняване', 'Чака трето лице', 'Решение издадено', 'Приключена'];
 export const CASE_OPEN = ['Нова', 'В обработка', 'Чака уточняване', 'Чака трето лице'];
 export const CASE_KIND = ['Достъп до обществена информация', 'Повторно използване на информация'];
 export const CASE_CHANNEL = ['Писмено', 'По имейл (чл. 15, ал. 1, т. 4)', 'Платформа за достъп (чл. 15в)', 'Устно запитване', 'Сигурно електронно връчване'];
 export const APPLICANT_TYPE = ['Гражданин', 'Юридическо лице', 'Журналист или медия', 'Неправителствена организация'];
-export const ADDRESSEE_TYPE = APPLICANT_TYPE.concat('Орган или друга организация');
+export const ADDRESSEE_TYPE = ['Задължен субект (орган или организация)'].concat(APPLICANT_TYPE, 'Орган или друга организация');
 export const CASE_OUTCOME = ['', 'Предоставен достъп', 'Частичен достъп', 'Отказ', 'Препратено (чл. 32)', 'Няма информация (чл. 33)', 'Без разглеждане', 'Отказ на заявителя (чл. 36)'];
 export const DECISION_OUTCOMES = ['Предоставен достъп', 'Частичен достъп', 'Отказ'];
 export const SERVED_HOW = ['', 'Срещу подпис', 'С препоръчано писмо с обратна разписка', 'По имейл', 'Сигурно електронно връчване', 'Чрез платформата по чл. 15в'];
@@ -47,8 +49,8 @@ export function withDue(c, today) {
   } else {
     o.due = term(base, 14 + ext30 + ext31);
     o.dueLabel = 'Решение (чл. 28, ал. 1' + (ext30 ? '; чл. 30' : '') + (ext31 ? '; чл. 31' : '') + ')';
-    // след изтичане на срока без решение заявителят може да обжалва мълчаливия отказ (чл. 149, ал. 2 АПК)
-    o.silentBy = termMonths(o.due, 2);
+    // след изтичане на срока без решение заявителят може да обжалва мълчаливия отказ в едномесечен срок (чл. 149, ал. 2 АПК)
+    o.silentBy = termMonths(o.due, 1);
   }
   o.daysLeft = left(o.due);
   // трето лице: съгласието се иска до 7 дни от регистрирането (чл. 31, ал. 2); отговорът – в удължения срок
@@ -79,7 +81,10 @@ export const lists = () => ({
 
 export async function bootstrap(d, ctx, app) {
   const [users, departments] = await Promise.all([usersBrief(app), app.store.list('departments')]);
-  return { users, departments: departments.filter(x => x.active === 'Да').map(x => x.name), lists: lists(), session: ctx.sessionExp };
+  return {
+    users, departments: departments.filter(x => x.active === 'Да').map(x => x.name), lists: Object.assign(lists(), reqLists()),
+    org: await orgProfile(app), mailbox: mailboxAddress(app.env), session: ctx.sessionExp
+  };
 }
 
 export async function caseList(d, ctx, app) {
@@ -138,7 +143,7 @@ export async function caseCreate(d, ctx, app) {
     rec = await app.store.insert('cases', Object.assign(base, v, { regNo }));
   } else {
     const y = v.regDate.slice(0, 4);
-    rec = await insertUnique(app, 'cases', {}, 'regNo', n => 'ЗДОИ-' + y + '-' + String(n).padStart(4, '0'), Object.assign(base, v));
+    rec = await insertUnique(app, 'cases', {}, 'regNo', n => 'ВХ-' + y + '-' + String(n).padStart(4, '0'), Object.assign(base, v));
     regNo = rec.regNo;
   }
   if (d.saveAddressee === true) await saveAddresseeFromCase(app, ctx, v);
@@ -258,7 +263,7 @@ export async function dashboard(d, ctx, app) {
   const open = cases.filter(c => CASE_OPEN.includes(c.status));
   const hearings = (await app.store.list('courts')).filter(x => x.nextHearing && x.nextHearing >= today && daysBetween(today, x.nextHearing) <= 30)
     .filter(x => !x.regNo || cases.some(c => c.regNo === x.regNo)).map(courtView).sort((a, b) => a.nextHearing.localeCompare(b.nextHearing));
-  return {
+  return Object.assign(await reqDashboard(app, ctx), {
     byStatus, total: cases.length, open: open.length,
     overdue: open.filter(c => c.daysLeft !== null && c.daysLeft < 0).map(brief),
     soon: open.filter(c => c.daysLeft !== null && c.daysLeft >= 0 && c.daysLeft <= 3).map(brief).sort((a, b) => a.daysLeft - b.daysLeft),
@@ -266,7 +271,7 @@ export async function dashboard(d, ctx, app) {
     unassigned: open.filter(c => !c.owner).map(brief),
     appeals: cases.filter(c => c.appealDays !== null && c.appealDays >= 0 && c.appealDays <= 7).map(brief),
     hearings
-  };
+  });
 }
 
 /* ---------- съдебни дела ---------- */
@@ -274,7 +279,8 @@ export async function dashboard(d, ctx, app) {
 const courtView = x => view(x);
 
 export async function courtList(d, ctx, app) {
-  const cases = (await app.store.list('cases')).filter(c => canSee(c, ctx)).map(c => c.regNo);
+  const cases = (await app.store.list('cases')).filter(c => canSee(c, ctx)).map(c => c.regNo)
+    .concat((await app.store.list('requests')).filter(r => canSee(r, ctx)).map(r => r.regNo));
   const rows = (await app.store.list('courts')).filter(x => !x.regNo || cases.includes(x.regNo) || ctx.perms.casesAll);
   return { courts: rows.map(courtView).sort(byDesc('at')), cases };
 }
@@ -286,7 +292,11 @@ export async function courtSave(d, ctx, app) {
     nextHearing: isoDate(d.nextHearing, 'Следващо заседание'), result: line(d.result, 250), note: str(d.note, 4000)
   };
   if (!v.caseNo || !v.year) fail('required', 'Посочете номер и година на делото.');
-  if (v.regNo) await findCase(app, v.regNo, ctx); // делото се води и при заключена преписка
+  // делото се води и при заключена преписка; връзката е към получено (ВХ-…) или изходящо заявление (П-…)
+  if (v.regNo && /^П-/.test(v.regNo)) {
+    const r = (await app.store.list('requests', { regNo: v.regNo }))[0];
+    if (!r || !(ctx.perms.casesAll || r.owner === ctx.username || r.createdBy === ctx.username)) fail('notfound', 'Преписката не е намерена.');
+  } else if (v.regNo) await findCase(app, v.regNo, ctx);
   const rows = await app.store.list('courts');
   if (rows.some(x => x.court === v.court && x.caseNo === v.caseNo && x.year === v.year && x._id !== String(d.id || ''))) fail('duplicate', 'Това дело вече е въведено.');
   const title = v.court + ' № ' + v.caseNo + '/' + v.year;
@@ -323,7 +333,7 @@ export async function courtDelete(d, ctx, app) {
 
 function addresseeFields(d) {
   const v = {
-    type: oneOf(d.type, ADDRESSEE_TYPE, 'Вид'), name: line(d.name, 200), eik: line(d.eik, 13), seat: line(d.seat, 120),
+    type: oneOf(d.type, ADDRESSEE_TYPE, 'Вид'), name: line(d.name, 200), regBasis: oneOf(d.regBasis || '', REG_BASIS, 'Регистрация'), eik: line(d.eik, 13), seat: line(d.seat, 120),
     address: line(d.address, 400), oblast: line(d.oblast, 80), email: line(d.email, 200).toLowerCase(), phone: line(d.phone, 40)
   };
   if (!v.name) fail('required', 'Посочете име или наименование.');

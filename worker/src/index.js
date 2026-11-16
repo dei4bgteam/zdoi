@@ -4,7 +4,7 @@
  * POST /api        { action, data } → { ok, ... }      – всички действия
  * POST /api/setup  заглавка X-Setup-Key                 – създава списъците в SharePoint и първия администратор
  * GET  /api/health                                      – проверка
- * Cron всеки час                                        – напомняния за срокове
+ * Cron на 5 минути                                      – входяща поща на приемната и напомняния за срокове
  */
 
 import { CFG } from './config.js';
@@ -16,6 +16,7 @@ import { sameText } from './crypto.js';
 import * as auth from './auth.js';
 import * as users from './users.js';
 import * as cases from './cases.js';
+import * as reqs from './requests.js';
 import { ROLE_ADMIN } from './config.js';
 
 /* auth: public | user | admin; perm: нужно право; */
@@ -52,6 +53,24 @@ export const ACTIONS = {
   'department.save': { auth: 'user', perm: 'departments', fn: users.departmentsSave },
   'log.list': { auth: 'user', perm: 'log', fn: users.logList },
   'logins.list': { auth: 'user', fn: users.loginsList },
+
+  'req.list': { auth: 'user', fn: reqs.reqList },
+  'req.get': { auth: 'user', fn: reqs.reqGet },
+  'req.create': { auth: 'user', perm: 'casesEdit', fn: reqs.reqCreate },
+  'req.update': { auth: 'user', perm: 'casesEdit', fn: reqs.reqUpdate },
+  'req.assign': { auth: 'user', perm: 'casesEdit', fn: reqs.reqAssign },
+  'req.lock': { auth: 'user', perm: 'casesEdit', fn: reqs.reqLock },
+  'req.comment': { auth: 'user', perm: 'casesEdit', fn: reqs.reqComment },
+  'doc.reserve': { auth: 'user', perm: 'casesEdit', fn: reqs.docReserve },
+  'doc.file': { auth: 'user', perm: 'casesEdit', big: true, fn: reqs.docFile },
+  'doc.download': { auth: 'user', fn: reqs.docDownload },
+  'mail.send': { auth: 'user', perm: 'casesEdit', fn: reqs.mailSend },
+  'mail.inbox': { auth: 'user', fn: reqs.mailInbox },
+  'mail.assign': { auth: 'user', perm: 'casesEdit', fn: reqs.mailAssign },
+  'mail.attachment': { auth: 'user', fn: reqs.mailAttachment },
+  'system.get': { auth: 'admin', fn: reqs.systemGet },
+  'system.save': { auth: 'admin', fn: reqs.systemSave },
+  'system.poll': { auth: 'admin', fn: reqs.systemPoll },
 
   'users.list': { auth: 'admin', fn: users.usersList },
   'users.save': { auth: 'admin', fn: users.usersSave },
@@ -118,8 +137,10 @@ async function handleApi(req, env) {
   let body;
   try {
     const raw = await req.text();
-    if (raw.length > CFG.MAX_BODY) return json({ ok: false, error: 'size', message: 'Данните са твърде големи.' }, 413);
+    if (raw.length > CFG.MAX_BIG_BODY) return json({ ok: false, error: 'size', message: 'Данните са твърде големи.' }, 413);
     body = JSON.parse(raw);
+    const a = ACTIONS[String(body && body.action)];
+    if (raw.length > CFG.MAX_BODY && !(a && a.big)) return json({ ok: false, error: 'size', message: 'Данните са твърде големи.' }, 413);
   } catch (_) {
     return json({ ok: false, error: 'bad', message: 'Невалидна заявка.' }, 400);
   }
@@ -179,6 +200,9 @@ export default {
   },
   async scheduled(event, env, ctx) {
     const { store, kv } = services(env);
-    ctx.waitUntil(cases.remindDeadlines(makeApp(env, store, kv, null)).then(r => console.log('напомняния', JSON.stringify(r))));
+    const app = makeApp(env, store, kv, null);
+    // пощата на приемната – на всеки 5 минути; напомнянията – веднъж на ден след 8:00 ч.
+    ctx.waitUntil(reqs.pollMail(app).then(r => console.log('поща', JSON.stringify(r)))
+      .then(() => cases.remindDeadlines(app)).then(r => console.log('напомняния', JSON.stringify(r))));
   }
 };

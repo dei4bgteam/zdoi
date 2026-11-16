@@ -73,6 +73,21 @@ export async function graph(env, method, path, body, headers = {}) {
   throw new GraphError(429, 'твърде много заявки');
 }
 
+/* двоични данни: качване (тяло – байтове) и сваляне (резултат – байтове) */
+export async function graphBytes(env, method, path, bytes, contentType) {
+  const url = path.startsWith('https://') ? path : GRAPH + path;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await fetch(url, {
+      method, body: bytes,
+      headers: Object.assign({ Authorization: 'Bearer ' + (await graphToken(env)) }, contentType ? { 'Content-Type': contentType } : {})
+    });
+    if (r.status === 401 && attempt === 0) { memToken = null; continue; }
+    if (!r.ok) throw new GraphError(r.status, await errorOf(r));
+    return method === 'GET' ? new Uint8Array(await r.arrayBuffer()) : r.json();
+  }
+  throw new GraphError(401, 'токен');
+}
+
 /* писмата не се пазят в „Изпратени“, защото съдържат еднократни връзки и кодове */
 export async function sendMail(env, to, subject, text, replyTo) {
   const sender = env.MAIL_SENDER;

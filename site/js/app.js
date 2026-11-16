@@ -1,6 +1,8 @@
 /* ADM ЗДОИ4You – интерфейс. Всички данни се вмъкват с textContent, без innerHTML. */
 
 import { term, termMonths, daysBetween } from './calendar.js';
+import * as Docs from './docs.js';
+import { addressPicker } from './address.js';
 
 const API = '/api';
 const SESSION_MIN = 30;
@@ -192,12 +194,15 @@ const kv = pairs => h('dl', { class: 'kv' }, pairs.filter(Boolean).map(([k, v]) 
 
 const NAV = () => [
   ['#/dashboard', 'Табло', true],
-  ['#/cases', 'Преписки', true],
+  ['#/requests', 'Заявления', true],
+  ['#/mail', 'Поща', !!me.perms.casesAll],
+  ['#/cases', 'Входящ регистър', true],
   ['#/courts', 'Дела', true],
   ['#/addressees', 'Адресати', true],
   ['#/calc', 'Срокове', true],
   ['#/departments', 'Отдели', true],
   ['#/users', 'Потребители', me.role === 'Администратор'],
+  ['#/system', 'Система', me.role === 'Администратор'],
   ['#/log', 'Дневник', !!me.perms.log],
   ['#/profile', 'Моят профил', true]
 ];
@@ -231,7 +236,7 @@ function shell() {
 function markNav() {
   const cur = location.hash.split('/').slice(0, 2).join('/');
   document.querySelectorAll('#nav a').forEach(a => {
-    const on = a.getAttribute('href') === cur || (cur === '#/case' && a.getAttribute('href') === '#/cases');
+    const on = a.getAttribute('href') === cur || (cur === '#/case' && a.getAttribute('href') === '#/cases') || (cur === '#/request' && a.getAttribute('href') === '#/requests');
     a.classList.toggle('on', on);
   });
 }
@@ -323,12 +328,28 @@ async function dashboardView() {
   try {
     const d = await api('dashboard');
     const tile = (n, label, href, cls) => h('a', { class: 'card tile ' + (cls || ''), href }, h('b', null, n), h('span', { class: 'muted' }, label));
+    const reqRows = (list, empty) => list.length ? h('ul', { class: 'list-plain' }, list.map(r => h('li', null,
+      h('a', { href: '#/request/' + encodeURIComponent(r.regNo) }, r.regNo + ' – ' + r.entityName),
+      h('span', { class: dueClass(r.daysLeft) }, (r.ours ? 'наше уточнение ' : '') + fmtDate(r.due) + ' · ' + dueText(r.daysLeft))))) : h('p', { class: 'empty' }, empty);
     const caseRows = (list, empty, withDue = true) => list.length ? h('ul', { class: 'list-plain' }, list.map(c => h('li', null,
       h('a', { href: '#/case/' + encodeURIComponent(c.regNo) }, c.regNo + ' – ' + c.applicantName),
       withDue ? h('span', { class: dueClass(c.daysLeft) }, c.due ? fmtDate(c.due) + ' · ' + dueText(c.daysLeft) : '—')
         : h('span', { class: dueClass(c.appealDays) }, fmtDate(c.appealBy) + ' · ' + dueText(c.appealDays))))) : h('p', { class: 'empty' }, empty);
     setView(
-      head('Табло', me.perms.casesEdit ? h('a', { class: 'btn primary', href: '#/case/new' }, 'Нова преписка') : null),
+      head('Табло', me.perms.casesEdit ? h('a', { class: 'btn primary', href: '#/request/new' }, 'Ново заявление') : null, me.perms.casesEdit ? h('a', { class: 'btn', href: '#/case/new' }, 'Входящо заявление') : null),
+      h('h2', { class: 'mb-12' }, 'Заявления до институции'),
+      h('div', { class: 'tiles' },
+        tile(d.reqWaiting.length, 'Чакат отговор или уточнение', '#/requests'),
+        tile(d.reqSilent.length, 'Без отговор в срок', '#/requests?f=overdue', d.reqSilent.length ? 'bad' : ''),
+        tile(d.reqDrafts, 'Чернови', '#/requests?f=draft'),
+        tile(d.unassignedMail, 'Неразпределени писма', '#/mail', d.unassignedMail ? 'warn' : ''),
+        tile(d.reqTotal, 'Всички заявления', '#/requests')),
+      h('div', { class: 'grid2 mb-16' },
+        h('section', { class: 'card stack' }, h('h2', null, 'Срокове по заявления'), reqRows(d.reqWaiting.slice(0, 12), 'Няма заявления, които чакат отговор.')),
+        h('section', { class: 'card stack' }, h('h2', null, 'За обжалване'), d.reqSilent.length || d.reqAppeals.length ? h('ul', { class: 'list-plain' },
+          d.reqSilent.map(r => h('li', null, h('a', { href: '#/request/' + encodeURIComponent(r.regNo) }, r.regNo + ' – ' + r.entityName), h('span', { class: dueClass(r.silentDays) }, 'мълчалив отказ до ' + fmtDate(r.silentBy)))),
+          d.reqAppeals.map(r => h('li', null, h('a', { href: '#/request/' + encodeURIComponent(r.regNo) }, r.regNo + ' – ' + r.entityName), h('span', { class: dueClass(r.appealDays) }, 'решение до ' + fmtDate(r.appealBy))))) : h('p', { class: 'empty' }, 'Няма срокове за обжалване.'))),
+      h('h2', { class: 'mb-12' }, 'Входящ регистър'),
       h('div', { class: 'tiles' },
         tile(d.open, 'Отворени преписки', '#/cases'),
         tile(d.overdue.length, 'С изтекъл срок', '#/cases?f=overdue', d.overdue.length ? 'bad' : ''),
@@ -503,7 +524,7 @@ async function caseView(regNo) {
     h('ul', { class: 'timeline' }, d.events.map(e => h('li', null, h('div', { class: 'small muted' }, fmtTime(e.at) + ' · ' + userName(e.user) + ' · ' + e.kind), h('div', { class: 'pre' }, e.text)))));
 
   setView(
-    head(c.regNo + (locked ? ' 🔒' : ''), statusPill(c.status), edit ? h('button', { class: 'btn', onclick: editData }, 'Данни') : null, edit ? h('button', { class: 'btn primary', onclick: editProgress }, 'Ход и решение') : null),
+    head(c.regNo + (locked ? ' 🔒' : ''), statusPill(c.status), h('button', { class: 'btn', onclick: () => caseDossier(d) }, 'Досие (PDF)'), edit ? h('button', { class: 'btn', onclick: editData }, 'Данни') : null, edit ? h('button', { class: 'btn primary', onclick: editProgress }, 'Ход и решение') : null),
     locked ? h('p', { class: 'warnbox mb-16' }, 'Преписката е заключена.') : null,
     h('div', { class: 'split' },
       h('div', { class: 'stack' },
@@ -571,6 +592,7 @@ async function courtsView() {
 const ADDRESSEE_FIELDS = () => [
   { k: 'type', label: 'Вид', type: 'select', options: boot.lists.addresseeTypes, req: true },
   { k: 'name', label: 'Име или наименование', req: true, max: 200 },
+  { k: 'regBasis', label: 'Регистрация', type: 'select', options: boot.lists.regBasis.map(o => [o, o || '— (физическо лице или без регистрация)']) },
   { k: 'eik', label: 'ЕИК/БУЛСТАТ', max: 13, pattern: '\\d{9}|\\d{13}' },
   { k: 'seat', label: 'Седалище', max: 120 },
   { k: 'oblast', label: 'Област', max: 80 },
@@ -583,9 +605,9 @@ async function addresseesView() {
   loading();
   try {
     const { addressees } = await api('addressee.list');
-    const edit = a => formDialog(a._id ? 'Адресат' : 'Нов адресат', ADDRESSEE_FIELDS(), a, 'Запази', async v => {
+    const edit = a => enhanceParty(formDialog(a._id ? 'Адресат' : 'Нов адресат', ADDRESSEE_FIELDS(), a, 'Запази', async v => {
       await api('addressee.save', Object.assign(v, { id: a._id || '' })); toast('Запазено.'); addresseesView();
-    }, { wide: true });
+    }, { wide: true }));
     const q = h('input', { type: 'search', placeholder: 'Търсене…', 'aria-label': 'Търсене' });
     const body = h('div');
     const draw = () => {
@@ -740,6 +762,7 @@ async function profileView() {
   const notify = h('form', null, h('div', { class: 'stack' },
     field({ k: 'assign', label: 'Когато ме определят за отговорник', type: 'checkbox' }, n.assign),
     field({ k: 'deadline', label: 'Напомняния за срокове (3 дни, 1 ден, в деня и ден след)', type: 'checkbox' }, n.deadline),
+    field({ k: 'mail', label: 'Входящо писмо по моя преписка', type: 'checkbox' }, n.mail),
     field({ k: 'status', label: 'Промяна на статуса', type: 'checkbox' }, n.status),
     field({ k: 'comments', label: 'Нов коментар', type: 'checkbox' }, n.comments),
     me.perms.casesAll ? field({ k: 'all', label: 'Статус и коментари за всички преписки, не само моите', type: 'checkbox' }, n.all) : null),
@@ -788,6 +811,500 @@ function calcView() {
   draw();
 }
 
+/* ---------- общи: регистрация (ЕИК по ТЗ / код по БУЛСТАТ по ЗРБ), адрес от списък ---------- */
+
+const REGISTRY_TR = 'https://portal.registryagency.bg/CR/bg/Reports/VerificationPersonOrg';
+const REGISTRY_BULSTAT = 'https://reports.bulstat.bg/bulstat-ireports/report.jsf?x_rpt=rpt2';
+const capital = t => t.charAt(0).toUpperCase() + t.slice(1);
+
+/* полетата на страна (адресат, заявител, субект) с представка: етикетът на ЕИК/БУЛСТАТ следва регистрацията, а адресът има избор от списък */
+function enhanceParty(root, prefix = '') {
+  const el = n => root.querySelector(`[name="${prefix}${n}"]`);
+  const basis = el('regBasis'), eik = el('eik'), addr = el('address'), obl = el('oblast');
+  if (basis && eik) {
+    const span = eik.closest('label').querySelector('span');
+    const links = h('small', null);
+    const sync = () => {
+      span.firstChild.textContent = capital(Docs.idLabel(basis.value));
+      links.replaceChildren(/БУЛСТАТ/.test(basis.value) ? h('a', { href: REGISTRY_BULSTAT, target: '_blank', rel: 'noopener' }, 'Справка в регистър БУЛСТАТ')
+        : /ЕИК/.test(basis.value) ? h('a', { href: REGISTRY_TR, target: '_blank', rel: 'noopener' }, 'Справка в Търговския регистър') : '');
+    };
+    basis.addEventListener('change', sync);
+    eik.closest('label').append(links);
+    sync();
+  }
+  if (addr) addr.closest('label').after(addressPicker(h, addr, obl));
+  return root;
+}
+
+function downloadB64(name, b64, type) {
+  const raw = atob(b64), bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: type || 'application/octet-stream' }));
+  const a = h('a', { href: url, download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+const reqPill = s => h('span', { class: 'pill ' + ({ 'Чернова': '', 'Изпратено': 'info', 'Чака уточняване': 'warn', 'Уточнено': 'info', 'Удължен срок': 'info', 'Получен отговор': 'ok', 'Предоставен достъп': 'ok', 'Частичен достъп': 'warn', 'Отказ': 'bad', 'Мълчалив отказ': 'bad', 'Обжалвано': 'warn', 'Приключено': '' }[s] || '') }, s || '—');
+
+/* редактор на точки: добавяне, изтриване и подреждане */
+function pointsEditor(points, label) {
+  const list = h('ol', { class: 'points' });
+  const row = text => {
+    const ta = h('textarea', { rows: 2, maxlength: 4000, 'aria-label': 'Точка' });
+    ta.value = text || '';
+    const li = h('li', { class: 'point' }, ta, h('div', { class: 'actions' },
+      h('button', { type: 'button', class: 'btn sm', title: 'Нагоре', onclick: () => li.previousElementSibling && list.insertBefore(li, li.previousElementSibling) }, '↑'),
+      h('button', { type: 'button', class: 'btn sm', title: 'Надолу', onclick: () => li.nextElementSibling && list.insertBefore(li.nextElementSibling, li) }, '↓'),
+      h('button', { type: 'button', class: 'btn sm danger', title: 'Изтрий', onclick: () => li.remove() }, '✕')));
+    return li;
+  };
+  (points && points.length ? points : ['']).forEach(p => list.append(row(p)));
+  const add = h('button', { type: 'button', class: 'btn sm', onclick: () => { const li = row(''); list.append(li); li.querySelector('textarea').focus(); } }, '+ Добави точка');
+  const wrap = h('div', { class: 'field full' }, h('span', null, label || 'Искана информация (по точки)', h('span', { class: 'req' }, ' *')), list, add);
+  wrap.values = () => [...list.querySelectorAll('textarea')].map(t => t.value.trim()).filter(Boolean);
+  return wrap;
+}
+
+/* ---------- заявления: списък ---------- */
+
+async function requestsView(query) {
+  loading();
+  try {
+    const { requests } = await api('req.list');
+    const preset = new URLSearchParams(query || '').get('f') || '';
+    const q = h('input', { type: 'search', placeholder: 'Търсене: номер, субект, заявител, предмет…', 'aria-label': 'Търсене' });
+    const st = h('select', { 'aria-label': 'Статус' }, h('option', { value: '' }, 'Всички статуси'), boot.lists.reqStatuses.map(s => h('option', { value: s }, s)));
+    const due = h('select', { 'aria-label': 'Срок' }, h('option', { value: '' }, 'Всички'), h('option', { value: 'overdue' }, 'Без отговор в срок'), h('option', { value: 'ours' }, 'Чака наше уточнение'), h('option', { value: 'mine' }, 'Моите'));
+    if (preset === 'draft') st.value = 'Чернова';
+    if (preset === 'overdue') due.value = 'overdue';
+    const body = h('div');
+    const draw = () => {
+      const t = q.value.trim().toLowerCase();
+      const rows = requests.filter(r => {
+        if (t && ![r.regNo, r.entityName, r.applicantName, r.title, r.outNo].join(' ').toLowerCase().includes(t)) return false;
+        if (st.value && r.status !== st.value) return false;
+        if (due.value === 'overdue' && !(r.due && !r.ours && r.daysLeft < 0)) return false;
+        if (due.value === 'ours' && !r.ours) return false;
+        if (due.value === 'mine' && r.owner !== me.username) return false;
+        return true;
+      });
+      body.replaceChildren(h('p', { class: 'small muted' }, 'Показани: ' + rows.length + ' от ' + requests.length),
+        table(['№', 'Задължен субект', 'Заявител', 'Предмет', 'Статус', 'Изх. №', 'Срок'], rows.map(r => h('tr', { class: 'link', onclick: () => { location.hash = '#/request/' + encodeURIComponent(r.regNo); } },
+          h('td', { class: 'mono' }, r.regNo, r.locked === 'Да' ? ' 🔒' : ''), h('td', null, r.entityName), h('td', null, r.mode === 'Клиент' ? r.applicantName : h('span', { class: 'muted' }, 'Сдружението')),
+          h('td', { class: 'subject' }, r.title || '—'), h('td', null, reqPill(r.status)), h('td', { class: 'mono' }, r.outNo || '—'),
+          h('td', null, r.due ? h('span', { class: dueClass(r.daysLeft) }, (r.ours ? 'наше уточнение: ' : '') + fmtDate(r.due), h('br'), h('span', { class: 'small' }, dueText(r.daysLeft))) : r.appealBy ? h('span', { class: 'small ' + dueClass(r.appealDays) }, 'обжалване до ' + fmtDate(r.appealBy)) : '—'))),
+        'Няма заявления по тези условия.'));
+    };
+    [q, st, due].forEach(x => x.addEventListener('input', draw));
+    setView(head('Заявления до институции', me.perms.casesEdit ? h('a', { class: 'btn primary', href: '#/request/new' }, 'Ново заявление') : null),
+      h('p', { class: 'small muted mb-12' }, 'Заявления по ЗДОИ, които ЗДОИ4You изпраща от свое име или като пълномощник на клиент. Отговорите идват на ' + boot.mailbox.replace('@', '+<№ на преписката>@') + ' и се разпределят автоматично.'),
+      h('div', { class: 'card' }, h('div', { class: 'filters' }, q, st, due), body));
+    draw();
+  } catch (e) { failView(e); }
+}
+
+/* ---------- заявление: съдържание (ново или редакция) ---------- */
+
+const PARTY_FIELDS = (prefix, opts = {}) => [
+  opts.type ? { k: prefix + 'type', label: 'Вид', type: 'select', options: boot.lists.applicantTypes } : null,
+  { k: prefix + 'name', label: opts.nameLabel || 'Име или наименование', req: !!opts.req, max: 250 },
+  { k: prefix + 'regBasis', label: 'Регистрация', type: 'select', options: boot.lists.regBasis.map(o => [o, o || '— (физическо лице или без регистрация)']) },
+  { k: prefix + 'eik', label: 'ЕИК/БУЛСТАТ', max: 13, pattern: '\\d{9}|\\d{13}' },
+  { k: prefix + 'address', label: 'Адрес', max: 400, full: true },
+  { k: prefix + 'oblast', label: 'Област', max: 80 },
+  { k: prefix + 'email', label: 'Имейл', type: 'email', max: 200 },
+  { k: prefix + 'phone', label: 'Телефон', type: 'tel', max: 40 },
+  opts.rep ? { k: prefix + 'rep', label: 'Представляван от', max: 160 } : null,
+  opts.rep ? { k: prefix + 'repPosition', label: 'Качество (длъжност)', max: 160 } : null
+].filter(Boolean);
+
+const pick = (v, prefix) => { const o = {}; Object.keys(v).filter(k => k.startsWith(prefix)).forEach(k => { o[k.slice(prefix.length)] = v[k]; }); return o; };
+const prefixed = (obj, prefix) => { const o = {}; Object.keys(obj || {}).forEach(k => { o[prefix + k] = obj[k]; }); return o; };
+
+async function requestEditView(regNo) {
+  if (!me.perms.casesEdit) return setView(h('p', { class: 'err' }, 'Нямате право да въвеждате заявления.'));
+  loading();
+  let r = null, addressees = [];
+  try {
+    if (regNo) r = (await api('req.get', { regNo })).request;
+    addressees = (await api('addressee.list')).addressees;
+  } catch (e) { return failView(e); }
+  const v = r ? Object.assign({ mode: r.mode, kind: r.kind, title: r.title, motives: r.motives, noPublish: r.noPublish }, prefixed(r.applicant, 'a_'), prefixed(r.entity, 'e_'))
+    : { mode: 'Сдружението', kind: boot.lists.reqKinds[0], e_regBasis: boot.lists.regBasis[2] };
+  const modeSel = field({ k: 'mode', label: 'Заявлението е от името на', type: 'select', options: [['Сдружението', 'Сдружението (ЗДОИ4You)'], ['Клиент', 'Клиент – ЗДОИ4You е пълномощник']], req: true }, v.mode);
+  const applicantBox = h('fieldset', null, h('legend', null, 'Заявител (клиент)'), h('div', { class: 'form-grid' }, PARTY_FIELDS('a_', { type: true, rep: true, req: true, nameLabel: 'Имена или наименование' }).map(f => field(f, v[f.k]))),
+    h('p', { class: 'small muted mt-8' }, 'Приложете пълномощно към заявлението (в документа – „Приложения“).'));
+  const entityPick = addressees.length ? h('label', { class: 'field' }, h('span', null, 'Избор от адресатите'),
+    h('select', { onchange: e => {
+      const a = addressees.find(x => x._id === e.target.value);
+      if (!a) return;
+      ['name', 'regBasis', 'eik', 'address', 'oblast', 'email', 'phone'].forEach(k => { const el = form.elements['e_' + k]; if (el) { el.value = a[k] || ''; el.dispatchEvent(new Event('change')); } });
+      form.elements.e_id.value = a._id;
+    } }, h('option', { value: '' }, '— изберете —'), addressees.map(a => h('option', { value: a._id }, a.name + (a.email ? ' · ' + a.email : ''))))) : null;
+  const points = pointsEditor(r ? r.points : [], 'Искана информация (по точки)');
+  const accessBox = h('div', { class: 'field full' }, h('span', null, 'Форма на достъп (чл. 26, ал. 1 ЗДОИ)'),
+    boot.lists.accessForms.map((a, i) => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'acc_' + i, checked: r ? r.access.includes(a) : i === 3 }), h('span', null, a))));
+  const form = h('form', null,
+    h('fieldset', null, h('legend', null, 'Заявител'), h('div', { class: 'form-grid' }, modeSel,
+      field({ k: 'kind', label: 'Вид заявление', type: 'select', options: boot.lists.reqKinds, req: true }, v.kind),
+      !r ? field({ k: 'owner', label: 'Отговорник', type: 'select', options: [['', '— без отговорник —']].concat(boot.users.filter(u => u.role !== 'Наблюдател').map(u => [u.username, u.name])) }, me.username) : null)),
+    applicantBox,
+    h('fieldset', null, h('legend', null, 'Задължен субект'), entityPick, h('div', { class: 'form-grid' }, PARTY_FIELDS('e_', { req: true, nameLabel: 'Наименование' }).map(f => field(f, v[f.k])),
+      h('input', { type: 'hidden', name: 'e_id', value: v.e_id || '' }))),
+    h('fieldset', null, h('legend', null, 'Искане'), h('div', { class: 'form-grid' },
+      field({ k: 'title', label: 'Предмет (кратко)', max: 250, full: true, placeholder: 'Например: договори за сметопочистване 2025 г.' }, v.title),
+      points,
+      field({ k: 'motives', label: 'Допълнителни мотиви (по желание)', type: 'textarea', rows: 5, max: 20000, full: true, hint: 'Законът не изисква мотиви. Полезни са при надделяващ обществен интерес (§ 1, т. 6 ДР ЗДОИ) или при повторно използване.' }, v.motives),
+      accessBox,
+      field({ k: 'noPublish', label: 'Заявителят не е съгласен информацията да се публикува на платформата (чл. 25, ал. 1, т. 5)', type: 'checkbox', full: true }, v.noPublish))),
+    h('div', { class: 'actions mt-16' }, h('a', { class: 'btn', href: r ? '#/request/' + encodeURIComponent(r.regNo) : '#/requests' }, 'Отказ'), h('button', { type: 'submit', class: 'btn primary' }, r ? 'Запази' : 'Създай чернова')));
+  const syncMode = () => { applicantBox.hidden = form.elements.mode.value !== 'Клиент'; applicantBox.querySelectorAll('[name="a_name"]').forEach(x => { x.required = !applicantBox.hidden; }); };
+  form.elements.mode.addEventListener('change', syncMode);
+  setView(head(r ? 'Редакция на ' + r.regNo : 'Ново заявление'), h('div', { class: 'card' }, form));
+  enhanceParty(form, 'a_'); enhanceParty(form, 'e_');
+  syncMode();
+  onSubmit(form, async val => {
+    const data = {
+      regNo: r ? r.regNo : undefined, contentOnly: true, mode: val.mode, kind: val.kind, title: val.title, motives: val.motives, noPublish: val.noPublish, owner: val.owner,
+      applicant: val.mode === 'Клиент' ? pick(val, 'a_') : {}, entity: pick(val, 'e_'), points: points.values(),
+      access: boot.lists.accessForms.filter((a, i) => form.elements['acc_' + i].checked)
+    };
+    if (!data.points.length) throw new Error('Добавете поне една точка с исканата информация.');
+    const res = await api(r ? 'req.update' : 'req.create', data);
+    toast(r ? 'Запазено.' : 'Създадена е чернова ' + res.regNo + '.');
+    location.hash = '#/request/' + encodeURIComponent(res.regNo);
+  });
+}
+
+/* ---------- заявление: страница на преписката ---------- */
+
+const PROGRESS_REQ_FIELDS = () => [
+  { k: 'status', label: 'Статус', type: 'select', options: boot.lists.reqStatuses, req: true },
+  { k: 'sentAt', label: 'Изпратено на', type: 'date' },
+  { k: 'sentHow', label: 'Начин на изпращане', type: 'select', options: boot.lists.sentHow.map(o => [o, o || '—']) },
+  { k: 'entityRegNo', label: 'Вх. № при субекта', max: 60 },
+  { k: 'entityRegDate', label: 'Вх. дата при субекта', type: 'date', hint: 'Срокът по чл. 28 тече от регистрирането.' },
+  { k: 'clarifyAskedAt', label: 'Субектът поиска уточняване на', type: 'date' },
+  { k: 'clarifySentAt', label: 'Изпратено уточнение на', type: 'date' },
+  { k: 'ext30', label: 'Удължаване по чл. 30 (дни, до 10)', type: 'number', min: 0, maxValue: 10 },
+  { k: 'ext31', label: 'Удължаване по чл. 31 (дни, до 14)', type: 'number', min: 0, maxValue: 14 },
+  { k: 'decisionNo', label: 'Решение №', max: 60 },
+  { k: 'decisionDate', label: 'Дата на решението', type: 'date' },
+  { k: 'outcome', label: 'Резултат', type: 'select', options: boot.lists.reqOutcomes.map(o => [o, o || '—']) },
+  { k: 'servedAt', label: 'Решението е получено на', type: 'date', hint: 'От тази дата тече 14-дневният срок за обжалване.' },
+  { k: 'appealed', label: 'Обжалвано', type: 'checkbox' },
+  { k: 'appealNote', label: 'Бележка за обжалването', type: 'textarea', full: true, rows: 2, max: 4000 },
+  { k: 'notes', label: 'Вътрешни бележки', type: 'textarea', full: true, rows: 3, max: 8000 }
+];
+
+async function requestView(regNo) {
+  loading();
+  let d;
+  try { d = await api('req.get', { regNo }); } catch (e) { return failView(e); }
+  const r = d.request, locked = r.locked === 'Да', edit = me.perms.casesEdit && !locked;
+  const reload = () => requestView(regNo);
+  const full = () => Object.assign({}, r, { applicant: r.applicant, entity: r.entity, points: r.points, access: r.access });
+
+  const progress = () => formDialog('Ход и решение', PROGRESS_REQ_FIELDS(), r, 'Запази', async v => {
+    await api('req.update', Object.assign(full(), v, { regNo: r.regNo }));
+    toast('Запазено.'); reload();
+  }, { wide: true });
+
+  const dueCard = h('section', { class: 'card stack' }, h('h2', null, 'Срокове'),
+    r.due ? h('div', null, h('div', { class: 'small muted' }, r.dueLabel), h('div', { class: 'bigdue ' + dueClass(r.daysLeft) }, fmtDate(r.due)), h('div', { class: dueClass(r.daysLeft) }, dueText(r.daysLeft)))
+      : h('p', { class: 'muted' }, r.status === 'Чернова' ? 'Сроковете започват след изпращането.' : 'Няма текущ срок.'),
+    r.silentBy && r.daysLeft !== null && r.daysLeft < 0 ? h('div', null, h('div', { class: 'small muted' }, 'Обжалване на мълчалив отказ (едномесечен срок, чл. 149, ал. 2 АПК)'), h('b', { class: dueClass(r.silentDays) }, fmtDate(r.silentBy) + ' · ' + dueText(r.silentDays))) : null,
+    r.appealBy ? h('div', null, h('div', { class: 'small muted' }, 'Обжалване на решението (14 дни, чл. 149, ал. 1 АПК)'), h('b', { class: dueClass(r.appealDays) }, fmtDate(r.appealBy) + ' · ' + dueText(r.appealDays))) : null,
+    h('p', { class: 'small muted' }, 'Отговори на: ', h('b', null, d.replyTo)));
+
+  const ownerSel = h('select', { disabled: !edit, 'aria-label': 'Отговорник' }, h('option', { value: '' }, '— без отговорник —'), boot.users.filter(u => u.role !== 'Наблюдател').map(u => h('option', { value: u.username }, u.name)));
+  ownerSel.value = r.owner || '';
+  const ownerCard = h('section', { class: 'card stack' }, h('h2', null, 'Отговорник'), ownerSel, edit ? h('div', { class: 'actions' },
+    h('button', { class: 'btn primary sm', onclick: async () => { try { await api('req.assign', { regNo: r.regNo, owner: ownerSel.value }); toast('Записано.'); reload(); } catch (e) { toast(e.message); } } }, 'Запази')) : null);
+  const canLock = me.perms.casesEdit && (me.role === 'Администратор' || (!locked && r.owner === me.username) || (locked && r.lockedBy === me.username));
+  const lockCard = h('section', { class: 'card stack' }, h('h2', null, 'Заключване'),
+    h('p', { class: 'small muted' }, locked ? 'Заключена от ' + userName(r.lockedBy) + ' на ' + fmtTime(r.lockedAt) + '.' : 'Заключената преписка се чете, но не се променя.'),
+    canLock ? h('button', { class: 'btn sm', onclick: async () => { try { await api('req.lock', { regNo: r.regNo, locked: !locked }); reload(); } catch (e) { toast(e.message); } } }, locked ? 'Отключи' : 'Заключи') : null);
+  const courtCard = h('section', { class: 'card stack' }, h('div', { class: 'head m-0' }, h('h2', null, 'Съдебни дела'), me.perms.courts ? h('button', { class: 'btn sm', onclick: () => courtDialog({ regNo: r.regNo, kind: r.status === 'Мълчалив отказ' ? 'Жалба срещу мълчалив отказ' : 'Жалба срещу решение' }, reload) }, 'Добави дело') : null),
+    d.courts.length ? h('ul', { class: 'list-plain' }, d.courts.map(x => h('li', null, h('span', null, x.court.replace('Административен съд – ', 'АС '), ' № ', x.caseNo, '/', x.year, h('br'), h('span', { class: 'small muted' }, x.status + (x.nextHearing ? ' · заседание ' + fmtDate(x.nextHearing) : ''))),
+      me.perms.courts ? h('button', { class: 'btn sm', onclick: () => courtDialog(x, reload) }, 'Промени') : null))) : h('p', { class: 'empty' }, 'Няма дела.'));
+
+  /* документи */
+  const docRows = d.docs.map(x => h('tr', null,
+    h('td', { class: 'mono' }, x.outNo), h('td', null, x.kind), h('td', null, fmtDate(x.date)),
+    h('td', null, x.sentAt ? h('span', { class: 'small' }, fmtTime(x.sentAt), h('br'), x.sentTo) : h('span', { class: 'pill' }, 'неизпратен')),
+    h('td', null, h('div', { class: 'actions' },
+      h('button', { class: 'btn sm', onclick: () => regenerate(x) }, 'PDF'),
+      edit && !x.sentAt ? h('button', { class: 'btn sm', onclick: () => docEditor(d, x.kind, x) }, 'Редактирай') : null,
+      edit && x.fileId ? h('button', { class: 'btn sm primary', onclick: () => composeDialog(d, { docs: [x.outNo] }) }, 'Изпрати') : null))));
+  const regenerate = async x => {
+    try {
+      const p = Object.assign({}, x.payload, { outNo: x.outNo, date: x.date });
+      await Docs.open(Docs.DEFS[x.kind](p), x.outNo + ' ' + x.kind + '.pdf');
+    } catch (e) { toast(e.message); }
+  };
+  const docsCard = h('section', { class: 'card stack' }, h('div', { class: 'head m-0' }, h('h2', null, 'Документи'),
+    edit ? h('div', { class: 'actions' }, boot.lists.docKinds.map(k => h('button', { class: 'btn sm', onclick: () => docEditor(d, k) }, '+ ' + k))) : null),
+    table(['Изх. №', 'Вид', 'Дата', 'Изпратен', ''], docRows, 'Няма документи. Създайте заявлението с „+ Заявление“.'));
+
+  /* кореспонденция */
+  const mailCard = h('section', { class: 'card stack' }, h('div', { class: 'head m-0' }, h('h2', null, 'Кореспонденция'), edit ? h('button', { class: 'btn sm', onclick: () => composeDialog(d, {}) }, 'Ново писмо') : null),
+    d.mail.length ? h('div', { class: 'stack' }, d.mail.map(m => h('div', { class: 'msg' + (m.direction === 'Изходяща' ? ' op' : '') },
+      h('div', { class: 'small muted' }, h('span', { class: 'pill ' + (m.direction === 'Входяща' ? 'info' : '') }, m.direction), ' ', fmtTime(m.at), ' · ', m.direction === 'Входяща' ? 'от ' + m.from : 'до ' + m.to, m.matched ? ' · разпределено: ' + m.matched : ''),
+      h('div', null, h('b', null, m.subject || '(без тема)')),
+      h('details', null, h('summary', { class: 'small' }, 'Текст'), h('div', { class: 'pre small' }, m.body)),
+      m.attachments.length ? h('div', { class: 'attach-chips' }, m.attachments.map((a, i) => a.fileId ? h('button', { class: 'btn sm', onclick: async () => { try { const f = await api('mail.attachment', { id: m._id, index: i }); downloadB64(f.name, f.data, f.contentType); } catch (e) { toast(e.message); } } }, '📎 ' + a.name) : h('span', { class: 'small muted' }, '📎 ' + a.name + (a.skipped ? ' (' + a.skipped + ')' : '')))) : null,
+      edit && m.direction === 'Входяща' ? h('div', { class: 'actions mt-8' }, h('button', { class: 'btn sm', onclick: () => composeDialog(d, { reply: m }) }, 'Отговори')) : null))) : h('p', { class: 'empty' }, 'Няма писма.'));
+
+  const comment = h('form', null, field({ k: 'text', label: 'Вътрешен коментар', type: 'textarea', rows: 2, max: 4000, req: true, full: true }), h('div', { class: 'actions mt-8' }, h('button', { type: 'submit', class: 'btn sm primary' }, 'Добави')));
+  onSubmit(comment, async v => { await api('req.comment', { regNo: r.regNo, text: v.text }); toast('Добавено.'); reload(); });
+  const history = h('section', { class: 'card stack' }, h('h2', null, 'Коментари и история'), edit ? comment : null,
+    h('ul', { class: 'timeline' }, d.events.map(e => h('li', null, h('div', { class: 'small muted' }, fmtTime(e.at) + ' · ' + userName(e.user) + ' · ' + e.kind), h('div', { class: 'pre' }, e.text)))));
+
+  const ent = r.entity, ap = r.applicant;
+  setView(
+    head(r.regNo + (locked ? ' 🔒' : ''), reqPill(r.status),
+      edit ? h('a', { class: 'btn', href: '#/request/' + encodeURIComponent(r.regNo) + '/edit' }, 'Редактирай искането') : null,
+      edit ? h('button', { class: 'btn', onclick: progress }, 'Ход и решение') : null,
+      h('button', { class: 'btn primary', onclick: () => reqDossier(d) }, 'Досие за съда (PDF)')),
+    h('div', { class: 'split' },
+      h('div', { class: 'stack' },
+        h('section', { class: 'card stack' }, h('h2', null, 'Искане'), kv([
+          ['Вид', r.kind], ['Предмет', r.title],
+          ['Задължен субект', [ent.name, ent.eik ? capital(Docs.idLabel(ent.regBasis)) + ' ' + ent.eik : '', ent.address, ent.email].filter(Boolean).join(' · ')],
+          ['Заявител', r.mode === 'Клиент' ? [ap.name, ap.eik ? capital(Docs.idLabel(ap.regBasis)) + ' ' + ap.eik : '', ap.address, ap.email].filter(Boolean).join(' · ') + ' (чрез ЗДОИ4You като пълномощник)' : boot.org.name + ' (ЗДОИ4You)'],
+          ['Изх. № на заявлението', r.outNo], ['Изпратено', r.sentAt ? fmtDate(r.sentAt) + (r.sentHow ? ' – ' + r.sentHow : '') : ''],
+          ['Вх. № при субекта', r.entityRegNo ? r.entityRegNo + (r.entityRegDate ? ' от ' + fmtDate(r.entityRegDate) : '') : ''],
+          ['Уточняване', r.clarifyAskedAt ? 'поискано ' + fmtDate(r.clarifyAskedAt) + (r.clarifySentAt ? ', изпратено ' + fmtDate(r.clarifySentAt) : '') : ''],
+          ['Решение', r.decisionNo ? '№ ' + r.decisionNo + (r.decisionDate ? ' от ' + fmtDate(r.decisionDate) : '') : ''], ['Резултат', r.outcome],
+          ['Получено решение', r.servedAt ? fmtDate(r.servedAt) : ''], ['Обжалвано', r.appealed === 'Да' ? 'Да' + (r.appealNote ? ' – ' + r.appealNote : '') : 'Не']
+        ]), h('div', null, h('div', { class: 'small muted' }, 'Искана информация'), h('ol', null, r.points.map(p => h('li', { class: 'pre' }, p)))),
+        r.motives ? h('details', null, h('summary', null, 'Мотиви'), h('p', { class: 'pre' }, r.motives)) : null,
+        r.notes ? h('div', null, h('div', { class: 'small muted' }, 'Вътрешни бележки'), h('p', { class: 'pre' }, r.notes)) : null),
+        docsCard, mailCard, history),
+      h('div', { class: 'stack' }, dueCard, ownerCard, lockCard, courtCard)));
+}
+
+/* ---------- документ: заявление, уточнение, писмо ---------- */
+
+function docEditor(d, kind, existing) {
+  const r = d.request, prev = existing ? existing.payload : {};
+  const base = {
+    org: boot.org, mode: r.mode, applicant: r.applicant, entity: r.entity, reqKind: r.kind, replyTo: d.replyTo, title: r.title,
+    points: r.points, motives: r.motives, access: r.access, noPublish: r.noPublish === 'Да', accessEmail: d.replyTo, place: boot.org.place, signMode: 'electronic'
+  };
+  const p0 = Object.assign({}, base, kind === 'Заявление' ? {} : { points: [], motives: '', title: kind === 'Писмо' ? '' : r.title }, prev);
+  if (kind === 'Уточнение' && !prev.ref) {
+    const app = d.docs.find(x => x.kind === 'Заявление');
+    p0.ref = { outNo: r.outNo || (app && app.outNo) || '', outDate: (app && app.date) || r.sentAt || '', entityRegNo: r.entityRegNo, entityRegDate: r.entityRegDate, letterNo: '', letterDate: r.clarifyAskedAt || '' };
+  }
+  const points = kind === 'Писмо' ? null : pointsEditor(p0.points, kind === 'Уточнение' ? 'Уточнение (по точки)' : 'Искана информация (по точки)');
+  const accessBox = kind === 'Заявление' ? h('div', { class: 'field full' }, h('span', null, 'Форма на достъп'),
+    boot.lists.accessForms.map((a, i) => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'acc_' + i, checked: (p0.access || []).includes(a) }), h('span', null, a)))) : null;
+  const ref = p0.ref || {};
+  const fields = h('div', { class: 'form-grid' },
+    kind !== 'Уточнение' ? field({ k: 'title', label: kind === 'Писмо' ? 'Относно' : 'Предмет (Относно)', max: 250, full: true }, p0.title) : null,
+    kind === 'Уточнение' ? [
+      field({ k: 'ref_letterNo', label: 'Писмо на субекта – изх. №', max: 60 }, ref.letterNo), field({ k: 'ref_letterDate', label: 'от дата', type: 'date' }, ref.letterDate),
+      field({ k: 'ref_outNo', label: 'Наше заявление – Изх. №', max: 30 }, ref.outNo), field({ k: 'ref_outDate', label: 'от дата', type: 'date' }, ref.outDate),
+      field({ k: 'ref_entityRegNo', label: 'Вх. № при субекта', max: 60 }, ref.entityRegNo), field({ k: 'ref_entityRegDate', label: 'от дата', type: 'date' }, ref.entityRegDate)] : null,
+    field({ k: 'salutation', label: 'Обръщение', max: 120, full: true }, p0.salutation || 'Уважаеми господин/госпожо,'),
+    points,
+    kind === 'Писмо' ? field({ k: 'body', label: 'Текст', type: 'textarea', rows: 10, max: 30000, full: true, req: true }, p0.body) : null,
+    kind !== 'Писмо' ? field({ k: 'motives', label: kind === 'Уточнение' ? 'Пояснения (по желание)' : 'Допълнителни мотиви (по желание)', type: 'textarea', rows: 5, max: 20000, full: true }, p0.motives) : null,
+    accessBox,
+    kind === 'Заявление' ? field({ k: 'accessEmail', label: 'Имейл за получаване на информацията', type: 'email', max: 200 }, p0.accessEmail) : null,
+    kind === 'Заявление' ? field({ k: 'noPublish', label: 'Несъгласие с публикуване на платформата (чл. 25, ал. 1, т. 5)', type: 'checkbox' }, p0.noPublish) : null,
+    field({ k: 'extra', label: 'Допълнителен текст преди подписа (по желание)', type: 'textarea', rows: 2, max: 8000, full: true }, p0.extra),
+    field({ k: 'attachments', label: 'Приложения (по едно на ред)', type: 'textarea', rows: 2, max: 2000, full: true, hint: r.mode === 'Клиент' ? 'Например: Пълномощно.' : '' }, (p0.attachments || (r.mode === 'Клиент' && kind === 'Заявление' ? ['Пълномощно'] : [])).join('\n')),
+    field({ k: 'place', label: 'Място', max: 80 }, p0.place),
+    field({ k: 'signMode', label: 'Подпис', type: 'select', options: [['electronic', 'Квалифициран електронен подпис'], ['manual', 'Саморъчен подпис']] }, p0.signMode));
+  const collect = form => {
+    const v = formValues(form);
+    const p = Object.assign({}, base, { title: v.title || '', salutation: v.salutation, motives: v.motives || '', extra: v.extra || '', place: v.place, signMode: v.signMode,
+      attachments: String(v.attachments || '').split('\n').map(x => x.trim()).filter(Boolean) });
+    if (points) p.points = points.values();
+    if (kind === 'Заявление') Object.assign(p, { accessEmail: v.accessEmail, noPublish: !!v.noPublish, access: boot.lists.accessForms.filter((a, i) => form.elements['acc_' + i].checked) });
+    if (kind === 'Уточнение') p.ref = { letterNo: v.ref_letterNo, letterDate: v.ref_letterDate, outNo: v.ref_outNo, outDate: v.ref_outDate, entityRegNo: v.ref_entityRegNo, entityRegDate: v.ref_entityRegDate };
+    if (kind === 'Писмо') p.body = v.body;
+    if (points && !p.points.length) throw new Error('Добавете поне една точка.');
+    return p;
+  };
+  const status = h('p', { class: 'small muted' }, existing ? 'Изх. № ' + existing.outNo + ' се запазва.' : 'Изх. № (ЗДОИ-ГГГГ-NNNN) се дава при записване.');
+  const save = async (form, then) => {
+    const p = collect(form);
+    status.textContent = 'Записване…';
+    const res = await api('doc.reserve', { regNo: r.regNo, kind, title: p.title || kind, payload: p, outNo: existing ? existing.outNo : '' });
+    Object.assign(p, { outNo: res.outNo, date: res.date });
+    status.textContent = 'Генериране на PDF…';
+    const pdf = await Docs.base64Of(Docs.DEFS[kind](p));
+    await api('doc.file', { outNo: res.outNo, pdf });
+    toast(kind + ' изх. № ' + res.outNo + ' е записано.');
+    dlg.close();
+    if (then === 'send') { const fresh = await api('req.get', { regNo: r.regNo }); composeDialog(fresh, { docs: [res.outNo] }); requestView(r.regNo); }
+    else { await Docs.open(Docs.DEFS[kind](p), res.outNo + ' ' + kind + '.pdf'); requestView(r.regNo); }
+  };
+  const form = h('form', null, fields, status, h('div', { class: 'actions' },
+    h('button', { type: 'button', class: 'btn', onclick: () => dlg.close() }, 'Отказ'),
+    h('button', { type: 'button', class: 'btn', onclick: async () => { try { const p = collect(form); await Docs.preview(Docs.DEFS[kind](Object.assign(p, { outNo: existing ? existing.outNo : '(чернова)', date: todayIso() }))); } catch (e) { toast(e.message); } } }, 'Преглед'),
+    h('button', { type: 'submit', class: 'btn' }, 'Запиши и свали PDF'),
+    h('button', { type: 'button', class: 'btn primary', onclick: async e => { e.target.disabled = true; try { await save(form, 'send'); } catch (ex) { toast(ex.message); status.textContent = ex.message; } finally { e.target.disabled = false; } } }, 'Запиши и изпрати')));
+  const dlg = dialog((existing ? 'Редакция: ' : 'Ново: ') + kind + (existing ? ' ' + existing.outNo : ''), form, { wide: true });
+  onSubmit(form, async () => { await save(form, 'download'); });
+}
+
+/* ---------- имейл от приемната ---------- */
+
+function composeDialog(d, { docs = [], reply = null } = {}) {
+  const r = d.request;
+  const withFile = d.docs.filter(x => x.fileId);
+  const kinds = withFile.filter(x => docs.includes(x.outNo)).map(x => x.kind + ' изх. № ' + x.outNo);
+  const fromAddr = reply ? (/[^\s(]+@[^\s)]+/.exec(reply.from) || [''])[0] : (r.entity.email || '');
+  const subject = reply ? (/^re:/i.test(reply.subject) ? reply.subject : 'RE: ' + reply.subject) + (reply.subject.includes(r.regNo) ? '' : ' [' + r.regNo + ']')
+    : `[${r.regNo}] ${kinds.length ? kinds.join(', ') : 'Кореспонденция'}${r.title ? ' – ' + r.title : ''}`;
+  const sign = `\n\nС уважение,\n${boot.org.rep ? boot.org.rep + '\n' : ''}${boot.org.brand || 'ЗДОИ4You'} · ${boot.org.name}\n${boot.org.web || 'my.zdoi4you.eu'}`;
+  const text = reply ? `Уважаеми господин/госпожо,\n\n` + sign
+    : kinds.length ? `Уважаеми господин/госпожо,\n\nПриложено изпращаме ${kinds.join(' и ')}${r.mode === 'Клиент' ? ' от името на ' + r.applicant.name : ''}.\n\nМолим отговорите и решенията по преписката да бъдат изпращани на ${d.replyTo}.` + sign
+      : `Уважаеми господин/госпожо,\n\n` + sign;
+  const docBoxes = withFile.length ? h('div', { class: 'field full' }, h('span', null, 'Прикачи документи (PDF)'),
+    withFile.map(x => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'doc_' + x.outNo, checked: docs.includes(x.outNo) }), h('span', null, x.outNo + ' – ' + x.kind + (x.sentAt ? ' (изпратен ' + fmtDate(x.sentAt) + ')' : ''))))) : null;
+  formDialog(reply ? 'Отговор' : 'Писмо по ' + r.regNo, [
+    { k: 'to', label: 'До', req: true, max: 600, full: true, hint: 'Няколко адреса се разделят със запетая.' },
+    { k: 'cc', label: 'Копие', max: 600, full: true },
+    { k: 'subject', label: 'Тема', req: true, max: 250, full: true },
+    { k: 'text', label: 'Текст', type: 'textarea', rows: 12, req: true, max: 30000, full: true }
+  ], { to: fromAddr, subject, text }, 'Изпрати', async (v, form) => {
+    const chosen = withFile.filter(x => form.elements['doc_' + x.outNo] && form.elements['doc_' + x.outNo].checked).map(x => x.outNo);
+    const res = await api('mail.send', { regNo: r.regNo, to: v.to, cc: v.cc, subject: v.subject, text: v.text, docs: chosen, replyTo: reply ? reply._id : '' });
+    toast('Изпратено. Отговорите идват на ' + res.replyTo + '.');
+    requestView(r.regNo);
+  }, { wide: true, extra: h('div', { class: 'stack mt-12' }, docBoxes, h('p', { class: 'note' }, 'Изпраща се от ' + d.mailbox + ' с адрес за отговор ' + d.replyTo + '. Копие остава в „Изпратени“ на приемната.')) });
+}
+
+/* ---------- досие за съда ---------- */
+
+const generated = () => ({ generatedAt: new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Sofia' }).replace(' ', 'T'), generatedBy: me.name + ' (' + me.username + ')' });
+
+async function reqDossier(d) {
+  const r = d.request, ent = r.entity, ap = r.applicant;
+  try {
+    await Docs.open(Docs.dossierDef(Object.assign({
+      org: boot.org, title: 'ДОСИЕ НА ПРЕПИСКА ' + r.regNo, subtitle: (r.kind || '') + (r.title ? ' – ' + r.title : ''),
+      sections: [
+        { heading: 'Страни', kv: [
+          ['Заявител', r.mode === 'Клиент' ? [ap.name, ap.eik ? Docs.idLabel(ap.regBasis) + ' ' + ap.eik : '', ap.address, ap.email].filter(Boolean).join(', ') + ' – чрез пълномощник ' + boot.org.name : boot.org.name + (boot.org.eik ? ', ' + Docs.idLabel(boot.org.regBasis) + ' ' + boot.org.eik : '')],
+          ['Задължен субект', [ent.name, ent.eik ? Docs.idLabel(ent.regBasis) + ' ' + ent.eik : '', ent.address, ent.email].filter(Boolean).join(', ')],
+          ['Адрес за кореспонденция', d.replyTo]] },
+        { heading: 'Искана информация', table: { head: ['№', 'Точка'], rows: r.points.map((p, i) => [i + 1, p]), widths: [20, '*'] } },
+        r.motives ? { heading: 'Мотиви', text: r.motives } : null,
+        { heading: 'Ход и срокове', kv: [
+          ['Статус', r.status], ['Изх. № на заявлението', r.outNo], ['Изпратено', r.sentAt ? fmtDate(r.sentAt) + (r.sentHow ? ' – ' + r.sentHow : '') : ''],
+          ['Вх. № при субекта', r.entityRegNo ? r.entityRegNo + (r.entityRegDate ? ' от ' + fmtDate(r.entityRegDate) : '') : ''],
+          ['Поискано уточняване', fmtDate(r.clarifyAskedAt)], ['Изпратено уточнение', fmtDate(r.clarifySentAt)],
+          ['Удължаване', [r.ext30 ? 'чл. 30: ' + r.ext30 + ' дни' : '', r.ext31 ? 'чл. 31: ' + r.ext31 + ' дни' : ''].filter(Boolean).join('; ')],
+          ['Срок за отговор', r.due ? fmtDate(r.due) + ' (' + r.dueLabel + ')' : ''],
+          ['Мълчалив отказ – обжалване до', r.silentBy && r.daysLeft < 0 ? fmtDate(r.silentBy) : ''],
+          ['Решение', r.decisionNo ? '№ ' + r.decisionNo + ' от ' + fmtDate(r.decisionDate) : ''], ['Резултат', r.outcome],
+          ['Решението е получено (връчено) на', fmtDate(r.servedAt)], ['Срок за обжалване', r.appealBy ? fmtDate(r.appealBy) : ''],
+          ['Обжалвано', r.appealed === 'Да' ? 'Да' + (r.appealNote ? ' – ' + r.appealNote : '') : 'Не']] },
+        { heading: 'Документи', table: { head: ['Изх. №', 'Вид', 'Дата', 'Изпратен на', 'До'], rows: d.docs.slice().reverse().map(x => [x.outNo, x.kind, fmtDate(x.date), fmtTime(x.sentAt), x.sentTo]), widths: [80, 60, 55, 80, '*'] } },
+        { heading: 'Кореспонденция (връчвания и отговори)', blocks: d.mail.slice().reverse().map(m => ({
+          head: `${m.direction} · ${fmtTime(m.at)} · ${m.direction === 'Входяща' ? 'от ' + m.from + ' до ' + m.to : 'от ' + m.from + ' до ' + m.to} · ${m.subject}`,
+          text: (m.body || '').slice(0, 6000) + (m.attachments.length ? '\nПрикачени: ' + m.attachments.map(a => a.name).join(', ') : '') + (m.docOutNo ? '\nДокументи: ' + m.docOutNo : '') })) },
+        { heading: 'Съдебни дела', table: { head: ['Съд', 'Дело', 'Вид', 'Статус', 'Заседание'], rows: d.courts.map(x => [x.court, x.caseNo + '/' + x.year, x.kind, x.status, fmtDate(x.nextHearing)]), widths: ['*', 50, 90, 70, 60] } },
+        { heading: 'История', table: { head: ['Време', 'Потребител', 'Действие', 'Описание'], rows: d.events.slice().reverse().map(e => [fmtTime(e.at), e.user, e.kind, e.text]), widths: [70, 60, 70, '*'] } }
+      ].filter(Boolean)
+    }, generated())), 'Досие ' + r.regNo + '.pdf');
+  } catch (e) { toast(e.message); }
+}
+
+async function caseDossier(d) {
+  const c = d.case;
+  try {
+    await Docs.open(Docs.dossierDef(Object.assign({
+      org: boot.org, title: 'ДОСИЕ НА ПРЕПИСКА ' + c.regNo, subtitle: 'Получено заявление – ' + c.kind,
+      sections: [
+        { heading: 'Заявление', kv: [['Регистрирано', fmtDate(c.regDate)], ['Начин на подаване', c.channel], ['Заявител', c.applicantName + ' (' + c.applicantType + ')'], ['ЕИК/БУЛСТАТ', c.applicantEik], ['Адрес', c.applicantAddress], ['Имейл', c.applicantEmail], ['Отговорник', userName(c.owner)]] },
+        { heading: 'Искана информация', text: c.subject },
+        { heading: 'Ход и решение', kv: [['Статус', c.status], ['Резултат', c.outcome], ['Уточняване', c.clarifyAsked ? 'поискано ' + fmtDate(c.clarifyAsked) + (c.clarifyGot ? ', получено ' + fmtDate(c.clarifyGot) : '') : ''],
+          ['Решение', c.decisionNo ? '№ ' + c.decisionNo + ' от ' + fmtDate(c.decisionDate) : ''], ['Основания', c.grounds], ['Връчено', c.served ? fmtDate(c.served) + (c.servedHow ? ' – ' + c.servedHow : '') : ''],
+          ['Срок за обжалване', c.appealBy ? fmtDate(c.appealBy) : ''], ['Обжалвано', c.appealed === 'Да' ? 'Да' + (c.appealNote ? ' – ' + c.appealNote : '') : 'Не']] },
+        { heading: 'Съдебни дела', table: { head: ['Съд', 'Дело', 'Вид', 'Статус', 'Заседание'], rows: d.courts.map(x => [x.court, x.caseNo + '/' + x.year, x.kind, x.status, fmtDate(x.nextHearing)]), widths: ['*', 50, 90, 70, 60] } },
+        { heading: 'История', table: { head: ['Време', 'Потребител', 'Действие', 'Описание'], rows: d.events.slice().reverse().map(e => [fmtTime(e.at), e.user, e.kind, e.text]), widths: [70, 60, 70, '*'] } }
+      ]
+    }, generated())), 'Досие ' + c.regNo + '.pdf');
+  } catch (e) { toast(e.message); }
+}
+
+/* ---------- неразпределена поща ---------- */
+
+async function mailInboxView() {
+  loading();
+  try {
+    const [{ mail }, { requests }] = await Promise.all([api('mail.inbox'), api('req.list')]);
+    const list = h('datalist', { id: 'req-nos' }, requests.map(r => h('option', { value: r.regNo }, r.regNo + ' – ' + r.entityName)));
+    setView(head('Неразпределена поща'), list,
+      h('p', { class: 'small muted mb-12' }, 'Писмата до ' + boot.mailbox + ' се разпределят автоматично по етикета след „+“, по номера на преписката или Изх. № в темата, или по имейла на субекта. Тук са писмата, които не са разпознати.'),
+      mail.length ? h('div', { class: 'stack' }, mail.map(m => {
+        const input = h('input', { list: 'req-nos', placeholder: 'П-ГГГГ-NNNN', 'aria-label': 'Преписка' });
+        return h('div', { class: 'card stack' },
+          h('div', { class: 'small muted' }, fmtTime(m.at) + ' · от ' + m.from + ' · до ' + m.to),
+          h('b', null, m.subject || '(без тема)'),
+          h('details', null, h('summary', { class: 'small' }, 'Текст'), h('div', { class: 'pre small' }, m.body)),
+          m.attachments.length ? h('div', { class: 'attach-chips' }, m.attachments.map((a, i) => a.fileId ? h('button', { class: 'btn sm', onclick: async () => { try { const f = await api('mail.attachment', { id: m._id, index: i }); downloadB64(f.name, f.data, f.contentType); } catch (e) { toast(e.message); } } }, '📎 ' + a.name) : h('span', { class: 'small muted' }, '📎 ' + a.name))) : null,
+          me.perms.casesEdit ? h('div', { class: 'filters m-0' }, input, h('button', { class: 'btn primary', onclick: async () => { try { await api('mail.assign', { id: m._id, regNo: input.value.trim() }); toast('Разпределено.'); mailInboxView(); } catch (e) { toast(e.message); } } }, 'Разпредели')) : null);
+      })) : h('div', { class: 'card' }, h('p', { class: 'empty' }, 'Няма неразпределени писма.')));
+  } catch (e) { failView(e); }
+}
+
+/* ---------- системни процеси ---------- */
+
+async function systemView() {
+  loading();
+  let s;
+  try { s = await api('system.get'); } catch (e) { return failView(e); }
+  const o = s.org;
+  const orgFields = [
+    { k: 'name', label: 'Наименование на Сдружението', req: true, max: 250, full: true },
+    { k: 'brand', label: 'Марка в бланката', max: 60 },
+    { k: 'regBasis', label: 'Регистрация', type: 'select', options: boot.lists.regBasis.map(x => [x, x || '—']) },
+    { k: 'eik', label: 'ЕИК/БУЛСТАТ', max: 13, pattern: '\\d{9}|\\d{13}' },
+    { k: 'address', label: 'Седалище и адрес на управление', max: 400, full: true },
+    { k: 'oblast', label: 'Област', max: 80 },
+    { k: 'rep', label: 'Представлява се от', max: 160 },
+    { k: 'repPosition', label: 'Качество', max: 160 },
+    { k: 'phone', label: 'Телефон', max: 40 },
+    { k: 'email', label: 'Имейл в бланката', type: 'email', max: 200 },
+    { k: 'web', label: 'Интернет адрес в бланката', max: 120 },
+    { k: 'place', label: 'Място по подразбиране', max: 80 }
+  ];
+  const orgForm = h('form', null, h('div', { class: 'form-grid' }, orgFields.map(f => field(f, o[f.k]))), h('button', { type: 'submit', class: 'btn primary mt-12' }, 'Запази профила'));
+  onSubmit(orgForm, async v => { await api('system.save', { org: v }); boot = await api('bootstrap'); toast('Профилът е запазен.'); });
+  const run = s.mailLastRun || {};
+  const poll = h('input', { type: 'checkbox', checked: s.mailPoll });
+  poll.addEventListener('change', async () => { try { await api('system.save', { mailPoll: poll.checked }); toast(poll.checked ? 'Автоматичното четене е включено.' : 'Автоматичното четене е спряно.'); } catch (e) { toast(e.message); poll.checked = !poll.checked; } });
+  setView(head('Системни процеси'), h('div', { class: 'grid2' },
+    h('section', { class: 'card stack' }, h('h2', null, 'Сдружението – заявител и бланка'), h('p', { class: 'small muted' }, 'Данните излизат в бланката на документите (с логото на ЗДОИ4You и ' + (o.web || 'my.zdoi4you.eu') + ') и като заявител, когато заявлението е от името на Сдружението.'), orgForm),
+    h('div', { class: 'stack' },
+      h('section', { class: 'card stack' }, h('h2', null, 'Поща на приемната'), kv([
+        ['Кутия', s.mailbox], ['Адрес за отговор (пример)', s.sampleReplyTo], ['Последна проверка', run.at ? fmtTime(run.at) : '—'],
+        ['Резултат', run.at ? `прочетени ${run.fetched}, нови ${run.saved}, разпределени ${run.matched}` : '—'], ['Грешка', run.error || '—'],
+        ['Неразпределени писма', String(s.unassigned)]]),
+        h('label', { class: 'check' }, poll, h('span', null, 'Автоматично четене на всеки 5 минути')),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn primary', onclick: async e => { e.target.disabled = true; try { const r = (await api('system.poll')).run; toast(r.error ? 'Грешка: ' + r.error : `Нови писма: ${r.saved}, разпределени: ${r.matched}.`); systemView(); } catch (ex) { toast(ex.message); } finally { e.target.disabled = false; } } }, 'Провери пощата сега'),
+          h('a', { class: 'btn', href: '#/mail' }, 'Неразпределени'))),
+      h('section', { class: 'card stack' }, h('h2', null, 'Номерация и срокове'), kv([
+        ['Следващ Изх. №', s.nextOutNo], ['Номер на преписка', 'П-ГГГГ-NNNN (изходящи), ВХ-ГГГГ-NNNN (входящ регистър)'],
+        ['Напомняния за срокове', 'всеки ден след 8:00 ч. (днес: ' + s.lastReminder + ')']])),
+      h('section', { class: 'card stack' }, h('h2', null, 'Данни и достъп'), kv([
+        ['База данни', 'SharePoint – списъци „ADM …“, файлове в „Документи/ADM“'], ['Потребители', 'меню „Потребители“'], ['Дневник', 'меню „Дневник“']]),
+        h('div', { class: 'actions' }, h('a', { class: 'btn', href: '#/users' }, 'Потребители'), h('a', { class: 'btn', href: '#/log' }, 'Дневник'), h('a', { class: 'btn', href: '#/departments' }, 'Отдели'))))));
+  enhanceParty(orgForm);
+}
+
 /* ---------- маршрути ---------- */
 
 async function route() {
@@ -816,6 +1333,10 @@ async function route() {
     case 'logins': return loginsView(parts[1]);
     case 'profile': return profileView();
     case 'calc': return calcView();
+    case 'requests': return requestsView(query);
+    case 'request': return parts[1] === 'new' ? requestEditView(null) : parts[2] === 'edit' ? requestEditView(parts[1]) : requestView(parts[1]);
+    case 'mail': return mailInboxView();
+    case 'system': return me.role === 'Администратор' ? systemView() : failView(new Error('Само за администратор.'));
     default: return setView(h('p', { class: 'err' }, 'Страницата не е намерена.'));
   }
 }
