@@ -3,7 +3,8 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
-import { createPrivateKey, createPublicKey, sign as nodeSign, verify as nodeVerify, createHash } from 'node:crypto';
+import { createPublicKey, sign as nodeSign, verify as nodeVerify, createHash, generateKeyPairSync } from 'node:crypto';
+import * as D from '../site/js/der.js';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,14 +19,31 @@ globalThis.window = globalThis.window || {};
 new Function(readFileSync(new URL('../site/vendor/pdf-lib.min.js', import.meta.url), 'utf8')).call(globalThis);
 window.PDFLib = globalThis.PDFLib;
 
-const fx = n => readFileSync(new URL('./fixtures/' + n, import.meta.url), 'utf8');
-const derOf = pem => Buffer.from(pem.replace(/-----[A-Z ]+-----/g, '').replace(/\s+/g, ''), 'base64');
+/* тестови самоподписани сертификати (не са истински КЕП): „карта“ с RSA или EC и сървър */
+const utc = d => D.tlv(0x17, new TextEncoder().encode(d.toISOString().replace(/[-:T]/g, '').slice(2, 14) + 'Z'));
+const attr = (o, v, tag = 0x0c) => D.set(D.seq(D.oid(o), D.tlv(tag, new TextEncoder().encode(v))));
+function makeCert(kind, card) {
+  const { privateKey, publicKey } = kind === 'ec' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const name = card
+    ? D.seq(attr(D.OID.country, 'BG', 0x13), attr(D.OID.cn, 'Иван Тестов Иванов'), attr(D.OID.serialNumber, 'PNOBG-8001010000', 0x13), attr(D.OID.givenName, 'Иван'), attr(D.OID.surname, 'Иванов'))
+    : D.seq(attr(D.OID.cn, 'adm.test'));
+  const ext = card ? D.ctx(3, D.seq(
+    D.seq(D.oid(D.OID.keyUsage), D.tlv(0x01, Uint8Array.of(0xff)), D.octets(D.tlv(0x03, Uint8Array.of(6, 0xc0)))),
+    D.seq(D.oid(D.OID.qcStatements), D.octets(D.seq(D.seq(D.oid(D.OID.qcCompliance)), D.seq(D.oid(D.OID.qcSscd)))))
+  )) : null;
+  const sigAlg = kind === 'ec' ? D.algo(D.OID.ecdsaSha256, false) : D.algo(D.OID.sha256Rsa);
+  const tbs = D.seq(D.ctx(0, D.int(2)), D.int(Date.now() % 1e9), sigAlg, name, D.seq(utc(new Date(Date.now() - 864e5)), utc(new Date(Date.now() + 3650 * 864e5))), name,
+    new Uint8Array(publicKey.export({ format: 'der', type: 'spki' })), ext);
+  const der = D.seq(tbs, sigAlg, D.bits(new Uint8Array(nodeSign('sha256', tbs, privateKey))));
+  return { key: privateKey, der: Buffer.from(der) };
+}
+const CERTS = { 'card-rsa': makeCert('rsa', true), 'card-ec': makeCert('ec', true), server: makeCert('rsa', false) };
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 /* BISS: /version, /getsigner, /sign; проверява signedContents като истинския (SHA256withRSA върху SHA-256 на данните) */
 function fakeBiss(card, serverCertB64) {
-  const cardKey = createPrivateKey(fx(card + '.key')), cardDer = derOf(fx(card + '.crt'));
+  const cardKey = CERTS[card].key, cardDer = CERTS[card].der;
   const serverPub = createPublicKey({ key: Buffer.from(serverCertB64, 'base64'), format: 'der', type: 'spki' }) ;
   const calls = [];
   globalThis.fetch = async (url, init) => {
@@ -61,9 +79,9 @@ async function samplePdf() {
 /* сървърният сертификат от фикстурите вместо Let's Encrypt */
 async function withServerCert(env) {
   const app = makeApp(env, env.__store, env.__kv, null);
-  const pkcs8 = createPrivateKey(fx('server.key')).export({ format: 'der', type: 'pkcs8' });
-  await storeCert(app, new Uint8Array(pkcs8), [derOf(fx('server.crt')).toString('base64')], '2036-01-01T00:00:00Z');
-  return createPublicKey(fx('server.crt')).export({ format: 'der', type: 'spki' }).toString('base64');
+  const s = CERTS.server;
+  await storeCert(app, new Uint8Array(s.key.export({ format: 'der', type: 'pkcs8' })), [s.der.toString('base64')], '2036-01-01T00:00:00Z');
+  return createPublicKey(s.key).export({ format: 'der', type: 'spki' }).toString('base64');
 }
 
 async function docWithPdf(admin) {
