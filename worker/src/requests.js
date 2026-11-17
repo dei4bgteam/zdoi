@@ -349,7 +349,9 @@ async function markSent(app, r, docs, at, how, to, extra = {}) {
     if (extra.entityRegNo && !r.entityRegNo) patch.entityRegNo = extra.entityRegNo;
     if (extra.entityRegDate && !r.entityRegDate) patch.entityRegDate = extra.entityRegDate;
   }
-  if (fresh.some(x => x.kind === 'Уточнение')) Object.assign(patch, { clarifySentAt: date, status: 'Уточнено' });
+  // само уточнението по искане на органа (чл. 29, ал. 1) рестартира срока; по инициатива на заявителя – не
+  const byOrgan = x => x.kind === 'Уточнение' && !/"clarifyBy"\s*:\s*"Инициатива на заявителя"/.test(x.payload || '');
+  if (fresh.some(byOrgan)) Object.assign(patch, { clarifySentAt: date, status: 'Уточнено' });
   await app.store.patch('requests', r._id, patch);
 }
 

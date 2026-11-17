@@ -5,9 +5,12 @@
  * Пази се само име, издател и маскиран идентификатор от сертификата, не ЕГН.
  */
 
-import { fail, line, stamp } from './util.js';
-import { audit } from './core.js';
-import { sha256 } from './crypto.js';
+import { fail, line, str, stamp } from './util.js';
+import { audit, throttle } from './core.js';
+import { sha256, hmac, randomToken } from './crypto.js';
+import { checkRevocation, verifySig } from './revocation.js';
+import { openSession, recordLogin, oauthOf, dropUser } from './auth.js';
+import { enabledProviders } from './oauth.js';
 import { signingCert, certStatus, ensureCert } from './acme.js';
 import { fromB64 } from './mailbox.js';
 import * as D from './der.js';
@@ -78,7 +81,7 @@ export async function verifyPdf(pdf) {
   const now = new Date();
   if (cert.notAfter && cert.notAfter < now) fail('value', 'Удостоверението на подписващия е изтекло.');
   if (cert.notBefore && cert.notBefore > now) fail('value', 'Удостоверението на подписващия още не е влязло в сила.');
-  return { cert, attrsDer: sd.attrsDer };
+  return { cert, attrsDer: sd.attrsDer, chain: sd.certs };
 }
 
 /* идентификаторът (напр. PNOBG-8001010000) се пази маскиран */
@@ -90,21 +93,26 @@ export async function kepComplete(d, ctx, app) {
   if (p._sig) fail('value', 'Документът вече е подписан.');
   const pdf = fromB64(String(d.pdf || ''));
   if (pdf.length < 200 || pdf.length > MAX_PDF || String.fromCharCode(...pdf.slice(0, 4)) !== '%PDF') fail('value', 'Невалиден PDF файл.');
-  const { cert, attrsDer } = await verifyPdf(pdf);
+  const { cert, attrsDer, chain } = await verifyPdf(pdf);
   // подписът трябва да е направен през тази система, за този документ и от същия потребител
   const key = 'kep:p:' + (await sha256(D.b64(attrsDer)));
   const pend = JSON.parse((await app.kv.get(key)) || 'null');
   if (!pend || pend.outNo !== doc.outNo || pend.u !== ctx.username) fail('value', 'Подписът не е започнат за този документ в системата. Подпишете отново.');
+  // публичните регистри на доставчика: прекратено или спряно удостоверение не подписва
+  const rev = await checkRevocation(cert, chain);
+  if (rev.status === 'revoked') fail('value', 'Удостоверението на ' + cert.name + ' е прекратено или спряно' + (rev.reason ? ' (' + rev.reason + ')' : '') + ' според ' + rev.method + ' на доставчика.');
   await app.kv.delete(key);
   const f = await app.store.uploadFile(doc.regNo + '/' + doc.outNo + ' ' + doc.kind + ' (подписан).pdf', pdf, 'application/pdf');
   const sig = {
     name: cert.name, org: cert.org, id: maskId(cert.id), issuer: cert.issuerName, qualified: cert.qualified, sscd: cert.sscd,
-    notAfter: cert.notAfter ? cert.notAfter.toISOString().slice(0, 10) : '', at: stamp(), by: ctx.username, unsignedFileId: doc.fileId || ''
+    notAfter: cert.notAfter ? cert.notAfter.toISOString().slice(0, 10) : '', at: stamp(), by: ctx.username, unsignedFileId: doc.fileId || '',
+    rev: { status: rev.status, method: rev.method || '', at: rev.at, note: rev.note || '' }
   };
   p._sig = sig;
   await app.store.patch('docs', doc._id, { fileId: f.id, fileUrl: f.webUrl, payload: JSON.stringify(p) });
   await app.store.insert('events', { regNo: doc.regNo, at: stamp(), user: ctx.username, kind: 'Подпис с КЕП',
-    text: doc.kind + ' изх. № ' + doc.outNo + ' е подписано от ' + sig.name + (sig.org ? ' (' + sig.org + ')' : '') + ', издател: ' + sig.issuer + (sig.qualified ? ', квалифициран' : '') });
+    text: doc.kind + ' изх. № ' + doc.outNo + ' е подписано от ' + sig.name + (sig.org ? ' (' + sig.org + ')' : '') + ', издател: ' + sig.issuer + (sig.qualified ? ', квалифициран' : '') +
+      (rev.status === 'good' ? '; проверено в ' + rev.method + ' на доставчика – валидно' : '; статусът в регистъра на доставчика не е проверен' + (rev.note ? ' (' + rev.note + ')' : '')) });
   await audit(app, ctx.username, 'Подпис с КЕП', doc.outNo, sig.name + ' · ' + sig.issuer);
   return { signature: sig, fileUrl: f.webUrl, regNo: req.regNo };
 }
@@ -115,4 +123,89 @@ export async function kepRenew(d, ctx, app) {
   const r = await ensureCert(app, true);
   await audit(app, ctx.username, 'Подновен сертификат за КЕП', '', r.error || r.notAfter || '');
   return Object.assign(r, await certStatus(app));
+}
+
+/* ---------- вход с КЕП ----------
+ * Сървърът дава еднократен текст, картата го подписва през BISS (със същото разрешение като при документите),
+ * сървърът проверява подписа, срока, регистъра на доставчика и намира потребителя по свързания КЕП.
+ * Връзката е по идентификатора на лицето в сертификата (напр. PNOBG-…), затова важи и след подновяване на КЕП
+ * или смяна на доставчика; пази се само HMAC от него.
+ */
+
+async function challengeFor(app, extra) {
+  const c = await signingCert(app);
+  if (!c) fail('setup', 'Входът с КЕП още не е готов (липсва сертификат на системата).');
+  const content = new TextEncoder().encode('ADM ZDOI4You – вход с КЕП · ' + new Date().toISOString() + ' · ' + randomToken().slice(0, 32));
+  const id = randomToken();
+  await app.kv.put('kc:' + (await sha256(id)), JSON.stringify(Object.assign({ c: D.b64(content) }, extra)), { expirationTtl: 300 });
+  const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', c.key, new Uint8Array(await crypto.subtle.digest('SHA-256', content))));
+  return { id, content: D.b64(content), signedContents: D.b64(sig), signedContentsCert: c.chain[0] };
+}
+
+export async function kepChallenge(d, ctx, app) {
+  if (!(await enabledProviders(app)).includes('kep')) fail('value', 'Входът с КЕП е изключен.');
+  const t = app.ip ? await throttle(app, 'kepch|' + app.ip, 30) : null;
+  if (t && (await t.blocked())) fail('locked', 'Твърде много опити. Опитайте отново след 15 минути.');
+  if (t) await t.hit();
+  return challengeFor(app, { mode: 'login' });
+}
+export const kepLinkChallenge = (d, ctx, app) => challengeFor(app, { mode: 'link', u: ctx.username });
+
+/* проверка на подписания текст: { cert, key (идентификатор за връзка), rev, st } */
+async function proveKep(app, d, mode) {
+  const id = str(d.id, 64);
+  if (!/^[0-9a-f]{64}$/.test(id)) fail('kep', 'Невалидна заявка.');
+  const k = 'kc:' + (await sha256(id)), raw = await app.kv.get(k);
+  if (!raw) fail('kep', 'Времето за вход изтече. Опитайте отново.');
+  await app.kv.delete(k);
+  const st = JSON.parse(raw);
+  if (st.mode !== mode) fail('kep', 'Невалидна заявка.');
+  const chain = (Array.isArray(d.chain) ? d.chain : []).slice(0, 6).map(x => D.unb64(String(x)));
+  if (!chain.length) fail('kep', 'Липсва удостоверението.');
+  let cert;
+  try { cert = D.parseCert(chain[0]); } catch (_) { fail('kep', 'Удостоверението не може да бъде разчетено.'); }
+  let sig = D.unb64(String(d.signature || ''));
+  const ec = cert.keyAlg === D.OID.ec;
+  if (ec && sig[0] !== 0x30) sig = D.ecdsaDer(sig);
+  if (!(await verifySig(cert.spki, ec ? D.OID.ecdsaSha256 : D.OID.sha256Rsa, sig, D.unb64(st.c)))) fail('kep', 'Подписът с КЕП е невалиден.');
+  const now = new Date();
+  if ((cert.notAfter && cert.notAfter < now) || (cert.notBefore && cert.notBefore > now)) fail('kep', 'Удостоверението не е валидно към днешна дата.');
+  if (!cert.qualified) fail('kep', 'За вход е нужен квалифициран електронен подпис (КЕП).');
+  const rev = await checkRevocation(cert, chain.slice(1));
+  if (rev.status === 'revoked') fail('kep', 'Удостоверението е прекратено или спряно според ' + rev.method + ' на доставчика.');
+  // идентификаторът на лицето (PNOBG-… и др.), а ако липсва – отпечатъкът на сертификата
+  const who = cert.id ? 'id|' + cert.id : 'cert|' + D.hex(new Uint8Array(await crypto.subtle.digest('SHA-256', cert.der)));
+  return { cert, key: await hmac(app.env.PEPPER, 'kep|' + who), rev, st };
+}
+
+export async function kepLogin(d, ctx, app) {
+  const byIp = app.ip ? await throttle(app, 'ip|' + app.ip) : null;
+  if (byIp && (await byIp.blocked())) fail('locked', 'Твърде много неуспешни опити. Опитайте отново след 15 минути.');
+  let p;
+  try { p = await proveKep(app, d, 'login'); } catch (e) {
+    if (byIp) await byIp.hit();
+    await recordLogin(app, '(непознат)', 'Отказан вход с КЕП: ' + e.message);
+    throw e;
+  }
+  const u = (await app.store.list('users')).find(x => oauthOf(x).kep && oauthOf(x).kep.id === p.key);
+  if (!u || u.active !== 'Да') {
+    if (byIp) await byIp.hit();
+    await recordLogin(app, u ? u.username : '(непознат)', 'Отказан вход с КЕП: ' + p.cert.name + (u ? ' (спрян потребител)' : ' (не е свързан)'));
+    fail('kep', u ? 'Достъпът ви е спрян.' : 'Този КЕП (' + p.cert.name + ') не е свързан с потребител. Влезте с паролата си и го свържете от „Моят профил“.');
+  }
+  return openSession(app, u, 'КЕП');
+}
+
+export async function kepLink(d, ctx, app) {
+  const p = await proveKep(app, d, 'link');
+  if (p.st.u !== ctx.username) fail('kep', 'Невалидна заявка.');
+  const users = await app.store.list('users');
+  if (users.some(x => x.username !== ctx.username && oauthOf(x).kep && oauthOf(x).kep.id === p.key)) fail('kep', 'Този КЕП вече е свързан с друг потребител.');
+  const u = users.find(x => x.username === ctx.username);
+  const o = oauthOf(u);
+  o.kep = { id: p.key, name: p.cert.name, email: p.cert.issuerName, at: stamp() };
+  await app.store.patch('users', u._id, { oauth: JSON.stringify(o) });
+  await dropUser(app, ctx.username);
+  await audit(app, ctx.username, 'Свързан вход с КЕП', '', p.cert.name + ' · ' + p.cert.issuerName);
+  return { name: p.cert.name };
 }

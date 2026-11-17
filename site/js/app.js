@@ -258,6 +258,7 @@ function gate(title, sub, ...body) {
 const PROVIDER_ICON = {
   google: '<svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>',
   microsoft: '<svg viewBox="0 0 21 21" width="18" height="18" aria-hidden="true"><path fill="#f25022" d="M1 1h9v9H1z"/><path fill="#7fba00" d="M11 1h9v9h-9z"/><path fill="#00a4ef" d="M1 11h9v9H1z"/><path fill="#ffb900" d="M11 11h9v9h-9z"/></svg>',
+  kep: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" fill="none" stroke="#1A8FE3" stroke-width="1.8"/><rect x="5" y="9" width="5" height="4" rx="0.8" fill="#E0B341"/><path d="M13 10h6M13 13h4" stroke="#1A8FE3" stroke-width="1.6" stroke-linecap="round"/></svg>',
   discord: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#5865F2" d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.6 1.3a18.4 18.4 0 0 0-5.5 0L8.6 3a19.7 19.7 0 0 0-4.9 1.5C.6 9.1-.3 13.7.1 18.2a19.9 19.9 0 0 0 6 3l1.3-2a12.9 12.9 0 0 1-2-1l.5-.4a14.2 14.2 0 0 0 12.2 0l.5.4c-.6.4-1.3.7-2 1l1.3 2a19.8 19.8 0 0 0 6-3c.5-5.2-.9-9.8-3.6-13.8zM8 15.4c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg>'
 };
 const providerIcon = p => { const s = h('span', { class: 'oauth-ico' }); s.innerHTML = PROVIDER_ICON[p] || ''; return s; };
@@ -277,7 +278,9 @@ function loginView(error) {
   api('oauth.providers').then(r => {
     if (!r.providers.length) return;
     external.replaceChildren(h('div', { class: 'or small muted' }, 'или'),
-      ...r.providers.map(p => h('a',{ class: 'btn block oauth-btn', href: '/api/oauth/' + p.id + '/start' }, providerIcon(p.id), 'Вход с ' + p.label)));
+      ...r.providers.map(p => p.id === 'kep'
+        ? h('button', { type: 'button', class: 'btn block oauth-btn', onclick: () => kepFlow('login') }, providerIcon('kep'), 'Вход с КЕП')
+        : h('a', { class: 'btn block oauth-btn', href: '/api/oauth/' + p.id + '/start' }, providerIcon(p.id), 'Вход с ' + p.label)));
     external.hidden = false;
   }).catch(() => { /* без външен вход */ });
   onSubmit(form, async v => {
@@ -798,17 +801,17 @@ async function profileView() {
   api('oauth.providers').then(r => {
     const linked = m.linked || {};
     const ids = new Set(r.providers.map(p => p.id).concat(Object.keys(linked)));
-    const label = id => (r.providers.find(p => p.id === id) || {}).label || ({ google: 'Google', microsoft: 'Microsoft', discord: 'Discord' })[id] || id;
+    const label = id => (r.providers.find(p => p.id === id) || {}).label || ({ google: 'Google', microsoft: 'Microsoft', discord: 'Discord', kep: 'КЕП' })[id] || id;
     linkedCard.replaceChildren(h('h2', null, 'Вход с външни профили'),
       h('p', { class: 'small muted' }, 'Свържете профил, за да влизате с него без парола. Двуфакторният вход (ако е включен) важи и тук.'),
       ids.size ? h('ul', { class: 'list-plain' }, [...ids].map(id => {
         const x = linked[id], on = r.providers.some(p => p.id === id);
         return h('li', null, h('span', { class: 'oauth-line' }, providerIcon(id), h('span', null, h('b', null, label(id)), h('br'),
-          h('span', { class: 'small muted' }, x ? 'свързан' + (x.email ? ' – ' + x.email : '') + (x.at ? ' · ' + fmtTime(x.at) : '') : on ? 'не е свързан' : 'изключен от администратора'))),
+          h('span', { class: 'small muted' }, x ? 'свързан' + (id === 'kep' && x.name ? ' – ' + x.name + (x.email ? ' (' + x.email + ')' : '') : x.email ? ' – ' + x.email : '') + (x.at ? ' · ' + fmtTime(x.at) : '') : on ? 'не е свързан' : 'изключен от администратора'))),
           x ? h('button', { class: 'btn sm', onclick: async () => {
             if (!confirm('Да се премахне входът с ' + label(id) + '?')) return;
             try { await api('oauth.unlink', { provider: id }); toast('Премахнато.'); profileView(); } catch (e) { toast(e.message); }
-          } }, 'Премахни') : on ? h('a', { class: 'btn sm primary', href: '/api/oauth/' + id + '/start?link=1' }, 'Свържи') : null);
+          } }, 'Премахни') : on ? (id === 'kep' ? h('button', { class: 'btn sm primary', onclick: () => kepFlow('link') }, 'Свържи') : h('a', { class: 'btn sm primary', href: '/api/oauth/' + id + '/start?link=1' }, 'Свържи')) : null);
       })) : h('p', { class: 'empty' }, 'Външният вход е изключен.'));
   }).catch(e => linkedCard.replaceChildren(h('p', { class: 'err' }, e.message)));
 }
@@ -1071,7 +1074,7 @@ async function requestView(regNo) {
   const docRows = d.docs.map(x => h('tr', null,
     h('td', { class: 'mono' }, x.outNo), h('td', null, x.kind), h('td', null, fmtDate(x.date)),
     h('td', null, x.sentAt ? h('span', { class: 'small' }, whenOf(x.sentAt), h('br'), x.sentTo) : h('span', { class: 'pill' }, 'неизпратен'),
-      x.payload._sig ? [h('br'), h('span', { class: 'pill ok', title: 'Издател: ' + x.payload._sig.issuer + (x.payload._sig.qualified ? ' · квалифициран' : '') + ' · ' + fmtTime(x.payload._sig.at) }, '✍ КЕП: ' + x.payload._sig.name)] : null),
+      x.payload._sig ? [h('br'), h('span', { class: 'pill ok', title: 'Издател: ' + x.payload._sig.issuer + (x.payload._sig.qualified ? ' · квалифициран' : '') + ' · ' + fmtTime(x.payload._sig.at) + (x.payload._sig.rev ? ' · регистър: ' + (x.payload._sig.rev.status === 'good' ? 'валидно (' + x.payload._sig.rev.method + ')' : 'не е проверено') : '') }, '✍ КЕП: ' + x.payload._sig.name)] : null),
     h('td', null, h('div', { class: 'actions' },
       h('button', { class: 'btn sm', onclick: () => regenerate(x) }, 'PDF'),
       edit && !x.sentAt && !x.payload._sig ? h('button', { class: 'btn sm', onclick: () => docEditor(d, x.kind, x) }, 'Редактирай') : null,
@@ -1153,6 +1156,8 @@ function docEditor(d, kind, existing) {
   const fields = h('div', { class: 'form-grid' },
     kind !== 'Уточнение' ? field({ k: 'title', label: kind === 'Писмо' ? 'Относно' : 'Предмет (Относно)', max: 250, full: true }, p0.title) : null,
     kind === 'Уточнение' ? [
+      field({ k: 'clarifyBy', label: 'Уточнението е', type: 'select', full: true, options: [[Docs.CLARIFY_BY[0], 'По искане на органа (чл. 29, ал. 1 ЗДОИ) – срокът тече от получаването му'], [Docs.CLARIFY_BY[1], 'По инициатива на заявителя – сроковете не се променят']] },
+        p0.clarifyBy || (r.clarifyAskedAt ? Docs.CLARIFY_BY[0] : Docs.CLARIFY_BY[1])),
       field({ k: 'ref_letterNo', label: 'Писмо на субекта – изх. №', max: 60 }, ref.letterNo), field({ k: 'ref_letterDate', label: 'от дата', type: 'date' }, ref.letterDate),
       field({ k: 'ref_outNo', label: 'Наше заявление – Изх. №', max: 30 }, ref.outNo), field({ k: 'ref_outDate', label: 'от дата', type: 'date' }, ref.outDate),
       field({ k: 'ref_entityRegNo', label: 'Вх. № при субекта', max: 60 }, ref.entityRegNo), field({ k: 'ref_entityRegDate', label: 'от дата', type: 'date' }, ref.entityRegDate)] : null,
@@ -1173,6 +1178,7 @@ function docEditor(d, kind, existing) {
       attachments: String(v.attachments || '').split('\n').map(x => x.trim()).filter(Boolean) });
     if (points) p.points = points.values();
     if (kind === 'Заявление') Object.assign(p, { accessEmail: v.accessEmail, noPublish: !!v.noPublish, access: boot.lists.accessForms.filter((a, i) => form.elements['acc_' + i].checked) });
+    if (kind === 'Уточнение') p.clarifyBy = v.clarifyBy;
     if (kind === 'Уточнение') p.ref = { letterNo: v.ref_letterNo, letterDate: v.ref_letterDate, outNo: v.ref_outNo, outDate: v.ref_outDate, entityRegNo: v.ref_entityRegNo, entityRegDate: v.ref_entityRegDate };
     if (kind === 'Писмо') p.body = v.body;
     if (points && !p.points.length) throw new Error('Добавете поне една точка.');
@@ -1198,12 +1204,45 @@ function docEditor(d, kind, existing) {
     h('button', { type: 'submit', class: 'btn' }, 'Запиши и свали PDF'),
     h('button', { type: 'button', class: 'btn primary', onclick: async e => { e.target.disabled = true; try { await save(form, 'send'); } catch (ex) { toast(ex.message); status.textContent = ex.message; } finally { e.target.disabled = false; } } }, 'Запиши и изпрати')));
   const dlg = dialog((existing ? 'Редакция: ' : 'Ново: ') + kind + (existing ? ' ' + existing.outNo : ''), form, { wide: true });
+  // по инициатива на заявителя няма писмо на субекта
+  if (kind === 'Уточнение') {
+    const sync = () => { const own = form.elements.clarifyBy.value === Docs.CLARIFY_BY[1]; ['ref_letterNo', 'ref_letterDate'].forEach(n => { form.elements[n].closest('label').hidden = own; form.elements[n].disabled = own; }); };
+    form.elements.clarifyBy.addEventListener('change', sync); sync();
+  }
   onSubmit(form, async () => { await save(form, 'download'); });
 }
 
 /* ---------- подпис с КЕП (смарт карта през B-Trust BISS) ---------- */
 
 const BISS_URL = 'https://www.b-trust.bg/services/software';
+
+const bissMissing = () => h('div', { class: 'stack' },
+  h('p', null, 'За КЕП на смарт карта е нужна безплатната програма B-Trust BISS. Тя работи и с карти на InfoNotary, StampIT и други доставчици.'),
+  h('ol', { class: 'small' }, h('li', null, 'Изтеглете и инсталирайте BISS (нужни са администраторски права).'), h('li', null, 'Включете четеца с картата и стартирайте BISS (иконка до часовника).'),
+    h('li', null, 'Ако картата не е от B-Trust, инсталирайте и удостоверителните вериги на вашия доставчик.'), h('li', null, 'Ако браузърът попита за достъп до устройства в локалната мрежа – разрешете.')),
+  h('a', { class: 'btn primary', href: BISS_URL, target: '_blank', rel: 'noopener' }, 'Изтегли BISS'));
+
+/* вход (mode 'login') или свързване към профила ('link') с КЕП */
+async function kepFlow(mode) {
+  const login = mode === 'login';
+  const status = h('p', { class: 'small muted' }, 'Търсене на BISS на този компютър…');
+  const body = h('div', { class: 'stack' }, status);
+  const dlg = dialog(login ? 'Вход с КЕП' : 'Свързване на КЕП', h('div', null, body, h('div', { class: 'actions mt-12' }, h('button', { type: 'button', class: 'btn', onclick: () => dlg.close() }, 'Затвори'))), {});
+  try {
+    const biss = await Kep.findBiss();
+    if (!biss) { body.replaceChildren(h('p', { class: 'err' }, 'Не е намерена програмата за подписване BISS.'), bissMissing()); return; }
+    status.textContent = 'Изберете сертификата от картата в прозореца на BISS…';
+    const signer = await Kep.chooseSigner(biss.port);
+    status.textContent = signer.cert.name + ' (' + signer.cert.issuerName + ') – въведете ПИН кода в прозореца на BISS…';
+    const ch = await api(login ? 'kep.challenge' : 'kep.linkChallenge');
+    const proof = await Kep.signChallenge(biss.port, signer, ch);
+    status.textContent = 'Проверка на удостоверението при доставчика…';
+    const r = await api(login ? 'kep.login' : 'kep.link', proof);
+    dlg.close();
+    if (login) { await startSession(r.me); location.hash = '#/dashboard'; route(); }
+    else { toast('КЕП на ' + r.name + ' е свързан.'); profileView(); }
+  } catch (e) { body.replaceChildren(h('p', { class: 'err' }, e.name === 'AbortError' ? 'BISS не отговори навреме.' : e.message)); }
+}
 
 async function kepSign(d, x) {
   const r = d.request;
@@ -1215,11 +1254,7 @@ async function kepSign(d, x) {
   try {
     const biss = await Kep.findBiss();
     if (!biss) {
-      return fail('Не е намерена програмата за подписване BISS.', h('div', { class: 'stack' },
-        h('p', null, 'За подписване с КЕП на смарт карта е нужна безплатната програма B-Trust BISS. Тя работи и с карти на InfoNotary, StampIT и други доставчици.'),
-        h('ol', { class: 'small' }, h('li', null, 'Изтеглете и инсталирайте BISS (нужни са администраторски права).'), h('li', null, 'Включете четеца с картата и стартирайте BISS (иконка до часовника).'),
-          h('li', null, 'Ако картата не е от B-Trust, инсталирайте и удостоверителните вериги на вашия доставчик.'), h('li', null, 'Ако браузърът попита за достъп до устройства в локалната мрежа – разрешете.')),
-        h('a', { class: 'btn primary', href: BISS_URL, target: '_blank', rel: 'noopener' }, 'Изтегли BISS')));
+      return fail('Не е намерена програмата за подписване BISS.', bissMissing());
     }
     status.textContent = 'BISS ' + biss.version + ' е намерен. Изберете сертификата от картата в прозореца на BISS…';
     const signer = await Kep.chooseSigner(biss.port);
@@ -1243,12 +1278,13 @@ async function kepSign(d, x) {
           port: biss.port, signer, pdfBytes, outNo: x.outNo, onStep: t => { step.textContent = t; },
           authorize: content => api('kep.authorize', { outNo: x.outNo, content })
         });
-        step.textContent = 'Проверка и записване…';
+        step.textContent = 'Проверка на подписа и в регистъра на доставчика (OCSP/CRL)…';
         let bin = '';
         for (let i = 0; i < signed.length; i += 0x8000) bin += String.fromCharCode.apply(null, signed.subarray(i, i + 0x8000));
         const res = await api('kep.complete', { outNo: x.outNo, pdf: btoa(bin) });
         dlg.close();
-        toast('Подписано от ' + res.signature.name + '.');
+        const rv = res.signature.rev || {};
+        toast('Подписано от ' + res.signature.name + '.' + (rv.status === 'good' ? ' Удостоверението е валидно според ' + rv.method + ' на доставчика.' : ' Статусът в регистъра на доставчика не е проверен.'));
         requestView(r.regNo);
       } catch (e) { step.className = 'err'; step.textContent = e.message; go.disabled = false; }
     };

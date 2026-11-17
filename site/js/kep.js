@@ -139,3 +139,16 @@ export async function signPdf(opts) {
   prep.bytes.set(new TextEncoder().encode(hexSig), prep.start + 1);
   return prep.bytes;
 }
+
+/* ---------- вход и свързване с КЕП ----------
+ * challenge: { id, content, signedContents, signedContentsCert } от сървъра; картата подписва текста (ПИН в BISS)
+ */
+export async function signChallenge(port, signer, ch) {
+  const r = await call(port, '/sign', {
+    version: '1.0', contents: [ch.content], contentType: 'data', hashAlgorithm: 'SHA256', signatureType: 'signature',
+    signedContents: [ch.signedContents], signedContentsCert: [ch.signedContentsCert], signerCertificateB64: signer.b64,
+    confirmText: ['Вход в ADM ЗДОИ4You']
+  }, 15 * 60000);
+  if (!r || r.status !== 'ok' || !r.signatures || !r.signatures[0]) throw new Error(bissError(r));
+  return { id: ch.id, signature: r.signatures[0], chain: signer.chain.map(D.b64) };
+}

@@ -68,7 +68,8 @@ const numbered = list => ({ ol: list.map(t => ({ text: t, alignment: 'justify', 
 /* кой иска: Сдружението или клиентът чрез Сдружението като пълномощник */
 function fromBlock(p) {
   const o = p.org, a = p.applicant || {};
-  const orgText = `${o.name} (${o.brand || 'ЗДОИ4You'})` + (o.eik ? `, ${idLabel(o.regBasis)} ${o.eik}` : '') + (o.address ? `, със седалище и адрес на управление: ${o.address}` : '') + (o.rep ? `, представлявано от ${o.rep}${o.repPosition ? ' – ' + o.repPosition : ''}` : '');
+  // в официалните реквизити – само наименованието (марката е в бланката)
+  const orgText = o.name + (o.eik ? `, ${idLabel(o.regBasis)} ${o.eik}` : '') + (o.address ? `, със седалище и адрес на управление: ${o.address}` : '') + (o.rep ? `, представлявано от ${o.rep}${o.repPosition ? ' – ' + o.repPosition : ''}` : '');
   if (p.mode !== 'Клиент') return P([{ text: 'от ', color: GRAY }, { text: orgText }]);
   const who = a.name + (a.eik ? `, ${idLabel(a.regBasis)} ${a.eik}` : '') + (a.address ? `, адрес: ${a.address}` : '') + (a.rep ? `, представлявано от ${a.rep}${a.repPosition ? ' – ' + a.repPosition : ''}` : '');
   return P([{ text: 'от ', color: GRAY }, { text: who, bold: true }, { text: ', чрез пълномощника ', color: GRAY }, { text: orgText }]);
@@ -150,21 +151,26 @@ export function applicationDef(p) {
 
 /* ---------- уточнение (чл. 29 ЗДОИ) ---------- */
 
+/* уточнение: по искане на органа (чл. 29, ал. 1 ЗДОИ – срокът тече от получаването му) или по инициатива на заявителя */
+export const CLARIFY_BY = ['Искане на органа', 'Инициатива на заявителя'];
+
 export function clarificationDef(p) {
-  const we = plural(p), r = p.ref || {};
-  const refText = `Във връзка с ${r.letterNo ? `Ваше писмо изх. № ${r.letterNo}` + (r.letterDate ? ` от ${fmtDate(r.letterDate)} г.` : '') : 'Ваше уведомление'} по ${we ? 'наше' : 'мое'} заявление за достъп до обществена информация` +
+  const we = plural(p), r = p.ref || {}, own = p.clarifyBy === CLARIFY_BY[1];
+  const req = `${we ? 'наше' : 'мое'} заявление за достъп до обществена информация` +
     (r.outNo ? ` изх. № ${r.outNo}` + (r.outDate ? ` от ${fmtDate(r.outDate)} г.` : '') : '') +
-    (r.entityRegNo ? `, вх. № ${r.entityRegNo}` + (r.entityRegDate ? ` от ${fmtDate(r.entityRegDate)} г.` : '') : '') +
-    `, на основание чл. 29, ал. 1 ЗДОИ ${we ? 'уточняваме' : 'уточнявам'} исканата информация, както следва:`;
+    (r.entityRegNo ? `, вх. № ${r.entityRegNo}` + (r.entityRegDate ? ` от ${fmtDate(r.entityRegDate)} г.` : '') : '');
+  const refText = own
+    ? `По ${req}, по собствена инициатива ${we ? 'уточняваме' : 'уточнявам'} исканата информация, както следва:`
+    : `Във връзка с ${r.letterNo ? `Ваше писмо изх. № ${r.letterNo}` + (r.letterDate ? ` от ${fmtDate(r.letterDate)} г.` : '') : 'Ваше уведомление'} по ${req}, на основание чл. 29, ал. 1 ЗДОИ ${we ? 'уточняваме' : 'уточнявам'} исканата информация, както следва:`;
   const content = [
     ...letterhead(p.org), outLine(p), addressee(p.entity || {}),
-    ...title('УТОЧНЕНИЕ', 'на заявление за достъп до обществена информация (чл. 29 ЗДОИ)'),
+    ...title('УТОЧНЕНИЕ', 'на заявление за достъп до обществена информация' + (own ? '' : ' (чл. 29 ЗДОИ)')),
     fromBlock(p),
     P(p.salutation || 'Уважаеми господин/госпожо,', { margin: [0, 6, 0, 6] }),
     P(refText),
     numbered(p.points || []),
     ...(p.motives ? [{ text: 'Пояснения', bold: true, margin: [0, 6, 0, 4] }, ...paras(p.motives).map(t => P(t))] : []),
-    P(`${we ? 'Молим' : 'Моля'} срокът по чл. 28, ал. 1 ЗДОИ да се смята от датата на получаване на настоящото уточнение (чл. 29, ал. 1 ЗДОИ).`),
+    own ? null : P(`${we ? 'Молим' : 'Моля'} срокът по чл. 28, ал. 1 ЗДОИ да се смята от датата на получаване на настоящото уточнение (чл. 29, ал. 1 ЗДОИ).`),
     correspondence(p),
     ...paras(p.extra).map(t => P(t)),
     ...attachmentsList(p),

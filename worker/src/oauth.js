@@ -72,6 +72,9 @@ export const PROVIDERS = {
 };
 
 const NAMES = Object.keys(PROVIDERS);
+/* КЕП не е OAuth: вход с подпис на карта през BISS (kep.js), но се включва/изключва и свързва оттук */
+const ALL = NAMES.concat('kep');
+const kepReady = async app => !!(await app.kv.get('kep:cert'));
 const redirectUri = (app, p) => app.cfg.appUrl.replace(/\/$/, '') + '/api/oauth/' + p + '/callback';
 
 function jwtClaims(t) {
@@ -100,22 +103,24 @@ export async function oauthSettings(app) {
 
 export async function enabledProviders(app) {
   const s = await oauthSettings(app);
-  return NAMES.filter(p => PROVIDERS[p].configured(app.env) && !s.off.includes(p));
+  const out = NAMES.filter(p => PROVIDERS[p].configured(app.env) && !s.off.includes(p));
+  if (!s.off.includes('kep') && (await kepReady(app))) out.push('kep');
+  return out;
 }
 
 /* публично: кои бутони да има на страницата за вход */
 export async function providersList(d, ctx, app) {
-  return { providers: (await enabledProviders(app)).map(p => ({ id: p, label: PROVIDERS[p].label })) };
+  return { providers: (await enabledProviders(app)).map(p => ({ id: p, label: p === 'kep' ? 'КЕП' : PROVIDERS[p].label })) };
 }
 
 export async function oauthSystem(app) {
   const s = await oauthSettings(app);
   return NAMES.map(p => ({ id: p, label: PROVIDERS[p].label, configured: PROVIDERS[p].configured(app.env), on: !s.off.includes(p), redirect: redirectUri(app, p) }))
-    .concat([{ id: '_autoLink', on: s.autoLink }]);
+    .concat([{ id: 'kep', label: 'КЕП (смарт карта през BISS)', configured: await kepReady(app), on: !s.off.includes('kep'), redirect: 'вход с подпис на картата; свързва се от „Моят профил“' }, { id: '_autoLink', on: s.autoLink }]);
 }
 
 export async function oauthSystemSave(d, ctx, app) {
-  const off = NAMES.filter(p => d[p] === false);
+  const off = ALL.filter(p => d[p] === false);
   await setSetting(app, 'oauthOff', JSON.stringify(off));
   await setSetting(app, 'oauthAutoLink', d.autoLink === false ? 'Не' : 'Да');
   await audit(app, ctx.username, 'Настройки за външен вход', '', 'изключени: ' + (off.join(', ') || 'няма') + '; свързване по имейл: ' + (d.autoLink === false ? 'не' : 'да'));
@@ -125,7 +130,7 @@ export async function oauthSystemSave(d, ctx, app) {
 /* премахване на свързан профил: потребителят за себе си, администраторът – за всеки */
 export async function oauthUnlink(d, ctx, app) {
   const p = line(d.provider, 20);
-  if (!NAMES.includes(p)) fail('value', 'Непознат доставчик.');
+  if (!ALL.includes(p)) fail('value', 'Непознат доставчик.');
   const username = d.username && ctx.admin ? str(d.username, 40).toLowerCase() : ctx.username;
   const u = await findUser(app, username);
   if (!u) fail('notfound', 'Потребителят не е намерен.');
@@ -134,7 +139,7 @@ export async function oauthUnlink(d, ctx, app) {
   delete o[p];
   await app.store.patch('users', u._id, { oauth: JSON.stringify(o) });
   await dropUser(app, username);
-  await audit(app, ctx.username, 'Премахнат вход с ' + PROVIDERS[p].label, username, '');
+  await audit(app, ctx.username, 'Премахнат вход с ' + (p === 'kep' ? 'КЕП' : PROVIDERS[p].label), username, '');
   return {};
 }
 

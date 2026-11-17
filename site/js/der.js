@@ -9,6 +9,8 @@ export const OID = {
   extensionRequest: '1.2.840.113549.1.9.14',
   sha256: '2.16.840.1.101.3.4.2.1', rsa: '1.2.840.113549.1.1.1', sha256Rsa: '1.2.840.113549.1.1.11',
   ec: '1.2.840.10045.2.1', ecdsaSha256: '1.2.840.10045.4.3.2', ecdsaSha384: '1.2.840.10045.4.3.3',
+  crlDp: '2.5.29.31', aia: '1.3.6.1.5.5.7.1.1', ocsp: '1.3.6.1.5.5.7.48.1', caIssuers: '1.3.6.1.5.5.7.48.2', ocspBasic: '1.3.6.1.5.5.7.48.1.1', sha1: '1.3.14.3.2.26',
+  sha1Rsa: '1.2.840.113549.1.1.5', sha384Rsa: '1.2.840.113549.1.1.12', sha512Rsa: '1.2.840.113549.1.1.13', email: '1.2.840.113549.1.9.1',
   cn: '2.5.4.3', serialNumber: '2.5.4.5', givenName: '2.5.4.42', surname: '2.5.4.4', org: '2.5.4.10', orgId: '2.5.4.97', country: '2.5.4.6',
   san: '2.5.29.17', keyUsage: '2.5.29.15', qcStatements: '1.3.6.1.5.5.7.1.3', qcCompliance: '0.4.0.1862.1.1', qcSscd: '0.4.0.1862.1.4',
   p256: '1.2.840.10045.3.1.7', p384: '1.3.132.0.34'
@@ -67,14 +69,14 @@ export const algo = (o, withNull = true) => seq(oid(o), withNull ? nul() : null)
 /* ---------- разчитане ---------- */
 
 /* връща { tag, len, start (тяло), end, hdr, raw, children? } */
-export function read(buf, pos = 0) {
+export function read(buf, pos = 0, depth = Infinity) {
   const tag = buf[pos];
   let p = pos + 1, l = buf[p++];
   if (l & 0x80) { const n = l & 127; l = 0; for (let i = 0; i < n; i++) l = l * 256 + buf[p++]; }
   const node = { tag, start: p, end: p + l, hdr: pos, raw: buf.subarray(pos, p + l), body: buf.subarray(p, p + l) };
-  if (tag & 0x20) {
+  if ((tag & 0x20) && depth > 0) {
     node.children = [];
-    for (let q = p; q < p + l;) { const c = read(buf, q); node.children.push(c); q = c.end; }
+    for (let q = p; q < p + l;) { const c = read(buf, q, depth - 1); node.children.push(c); q = c.end; }
   }
   return node;
 }
@@ -121,6 +123,13 @@ export function parseCert(der) {
     const qs = read(ext[OID.qcStatements]);
     for (const st of qs.children) { const id = oidStr(st.children[0].body); if (id === OID.qcCompliance) qualified = true; if (id === OID.qcSscd) sscd = true; }
   }
+  const uris = node => { const out = []; const walk = n => { if (n.tag === 0x86) out.push(new TextDecoder().decode(n.body)); (n.children || []).forEach(walk); }; walk(node); return out; };
+  const crl = ext[OID.crlDp] ? uris(read(ext[OID.crlDp])).filter(u => /^https?:/i.test(u)) : [];
+  const ocsp = [], caIssuers = [];
+  if (ext[OID.aia]) for (const ad of read(ext[OID.aia]).children) {
+    const m = oidStr(ad.children[0].body), g = ad.children[1];
+    if (g.tag === 0x86) (m === OID.ocsp ? ocsp : m === OID.caIssuers ? caIssuers : []).push(new TextDecoder().decode(g.body));
+  }
   let keyUsage = 0;
   if (ext[OID.keyUsage]) { const ku = read(ext[OID.keyUsage]).body; keyUsage = (ku[1] || 0) << 8 | (ku[2] || 0); }
   return {
@@ -129,6 +138,7 @@ export function parseCert(der) {
     subject: subj, issuer: iss, keyAlg, curve, qualified, sscd,
     nonRepudiation: !!(keyUsage & 0x4000), digitalSignature: !!(keyUsage & 0x8000),
     sigAlg: oidStr(c.children[1].children[0].body), signature: c.children[2].body.subarray(1),
+    crl, ocsp, caIssuers, email: subj[OID.email] || '',
     name: subj[OID.cn] || [subj[OID.givenName], subj[OID.surname]].filter(Boolean).join(' '),
     org: subj[OID.org] || '', id: subj[OID.serialNumber] || '', issuerName: iss[OID.cn] || iss[OID.org] || ''
   };

@@ -169,3 +169,22 @@ test('изпращане извън имейла: ССЕВ, поща, лично
   assert.equal(g.mail.find(m => m.direction === 'Входяща').from, 'Столична община');
   assert.ok(g.events.some(e => e.kind === 'Входящо писмо' && /Решение № 12/.test(e.text)));
 });
+
+test('уточнение по инициатива на заявителя не мести сроковете; по искане на органа – мести', async () => {
+  const { admin } = await setupReq();
+  const { regNo } = await admin.call('req.create', reqData());
+  const past = new Date(Date.now() - 5 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Europe/Sofia' });
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Sofia' });
+  await admin.call('req.update', Object.assign(reqData(), { regNo, status: 'Изпратено', sentAt: past, sentHow: 'Имейл' }));
+  const own = await admin.call('doc.reserve', { regNo, kind: 'Уточнение', payload: { clarifyBy: 'Инициатива на заявителя', points: ['x'] } });
+  await admin.call('mail.record', { regNo, channel: 'Поща', date: today, docs: [own.outNo] });
+  let g = await admin.call('req.get', { regNo });
+  assert.equal(g.request.status, 'Изпратено');
+  assert.equal(g.request.clarifySentAt, '');
+  await admin.call('req.update', Object.assign(reqData(), { regNo, status: 'Чака уточняване', sentAt: past, sentHow: 'Имейл', clarifyAskedAt: past }));
+  const byOrgan = await admin.call('doc.reserve', { regNo, kind: 'Уточнение', payload: { clarifyBy: 'Искане на органа', points: ['y'] } });
+  await admin.call('mail.record', { regNo, channel: 'Поща', date: today, docs: [byOrgan.outNo] });
+  g = await admin.call('req.get', { regNo });
+  assert.equal(g.request.status, 'Уточнено');
+  assert.equal(g.request.clarifySentAt, today);
+});
