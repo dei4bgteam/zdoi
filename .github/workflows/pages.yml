@@ -22,7 +22,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npm test
+      # при грешка редовете с нея излизат като анотации (видими и без вход в GitHub)
+      - name: Тестове
+        run: |
+          npm test > test.log 2>&1 || { cat test.log; grep -E "not ok|Error|rror:|expected|actual|AssertionError" test.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
       # Cloudflare кешира js и css: версията на commit-а сменя адресите им
       - name: Версия на файловете
         run: |
