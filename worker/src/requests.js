@@ -443,6 +443,22 @@ export async function mailAttachment(d, ctx, app) {
 
 /* ---------- автоматично разпределяне на входящата поща ---------- */
 
+/* известие от ССЕВ (edelivery.egov.bg) за ново съобщение в профила на Сдружението */
+export const isSsev = msg => /(^|[@.])(e-?gov\.bg)$/i.test(String(msg.from || '').split('@')[1] || '') &&
+  /edelivery|ССЕВ|сигурно електронно връчване/i.test([msg.from, msg.fromName, msg.subject, String(msg.body || '').slice(0, 3000)].join(' '));
+
+const norm = s => String(s || '').toLowerCase().replace(/[„“"'«»]/g, '').replace(/\s+/g, ' ').trim();
+
+/* в известието от ССЕВ подателят е институцията: търси се по наименованието ѝ сред чакащите преписки */
+function matchSsev(msg, requests) {
+  const text = norm(msg.subject + ' ' + String(msg.body || '').slice(0, 6000));
+  const open = requests.filter(x => x.entityName && norm(x.entityName).length > 4 && text.includes(norm(x.entityName)) &&
+    (REQ_WAITING.includes(x.status) || x.status === 'Мълчалив отказ'));
+  const viaSsev = open.filter(x => x.sentHow === 'Сигурно електронно връчване');
+  const pick = viaSsev.length === 1 ? viaSsev : open;
+  return pick.length === 1 ? [pick[0], 'ССЕВ: ' + pick[0].entityName] : [null, ''];
+}
+
 export async function matchRequest(app, msg, requests) {
   const local = mailboxAddress(app.env).split('@')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const plus = new RegExp('^' + local + '\\+([a-z0-9-]+)@', 'i');
@@ -460,6 +476,7 @@ export async function matchRequest(app, msg, requests) {
   }
   const from = msg.from.toLowerCase(), byEmail = requests.filter(x => x.entityEmail && x.entityEmail === from && REQ_WAITING.includes(x.status));
   if (byEmail.length === 1) return [byEmail[0], 'имейл на субекта'];
+  if (isSsev(msg)) return matchSsev(msg, requests);
   return [null, ''];
 }
 
@@ -487,13 +504,16 @@ export async function pollMail(app, { manual } = {}) {
       await app.store.insert('mail', {
         regNo: r ? r.regNo : '', messageId: msg.messageId, direction: 'Входяща', at: stamp(new Date(msg.at)), from: msg.from + (msg.fromName ? ' (' + msg.fromName + ')' : ''),
         to: msg.to.join(', '), cc: msg.cc.join(', '), subject: msg.subject, body: msg.body.slice(0, 60000), graphId: msg.graphId,
-        attachments: JSON.stringify(atts), matched: how
+        attachments: JSON.stringify(atts), matched: how, channel: isSsev(msg) ? 'Сигурно електронно връчване' : 'Имейл'
       });
       run.saved++;
       if (r) {
         run.matched++;
-        await event(app, r.regNo, 'поща', 'Входящо писмо', msg.from + ': ' + msg.subject + (atts.length ? ' (' + atts.length + ' прикачени)' : ''));
-        await notifyOwner(app, null, r, 'Получено писмо от ' + msg.from + ': ' + msg.subject, 'mail');
+        const ssev = isSsev(msg);
+        await event(app, r.regNo, 'поща', ssev ? 'Съобщение в ССЕВ' : 'Входящо писмо', ssev
+          ? 'Ново съобщение в ССЕВ от ' + r.entityName + ' – прочетете го в профила на Сдружението в edelivery.egov.bg и го регистрирайте („Регистрирай получено“).'
+          : msg.from + ': ' + msg.subject + (atts.length ? ' (' + atts.length + ' прикачени)' : ''));
+        await notifyOwner(app, null, r, ssev ? 'Ново съобщение в ССЕВ от ' + r.entityName + '. Отворете профила на Сдружението в edelivery.egov.bg.' : 'Получено писмо от ' + msg.from + ': ' + msg.subject, 'mail');
       }
     }
     await setSetting(app, 'mailWatermark', mark);

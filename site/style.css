@@ -214,3 +214,8 @@ fieldset legend { color: var(--ink); }
 .oauth-btn { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .oauth-ico { display: inline-flex; width: 18px; height: 18px; flex: none; }
 .oauth-line { display: inline-flex; align-items: center; gap: 10px; }
+
+/* подаване през ССЕВ */
+.ssev-steps { padding-left: 20px; }
+.ssev-box { border: 1px solid var(--line, #3a3f47); border-radius: 8px; padding: 8px 10px; margin-top: 6px; max-height: 160px; overflow: auto; }
+.warn-text { color: var(--warn); }

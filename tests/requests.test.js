@@ -188,3 +188,28 @@ test('уточнение по инициатива на заявителя не 
   assert.equal(g.request.status, 'Уточнено');
   assert.equal(g.request.clarifySentAt, today);
 });
+
+test('известие от ССЕВ по имейл се разпределя по институцията; чужд подател – не', async () => {
+  const { env, admin, box } = await setupReq();
+  const { regNo } = await admin.call('req.create', reqData());
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Sofia' });
+  const d1 = await admin.call('doc.reserve', { regNo, kind: 'Заявление', payload: { points: ['a'] } });
+  await admin.call('mail.record', { regNo, channel: 'Сигурно електронно връчване', date: today, docs: [d1.outNo], ref: 'ССЕВ-123' });
+  const ago = m => new Date(Date.now() - m * 60000).toISOString().slice(0, 19) + 'Z';
+  box.inbox.push(
+    { graphId: 's1', messageId: '<s1@x>', at: ago(10), from: 'noreply@edelivery.egov.bg', fromName: 'ССЕВ', to: ['priemna@zdoi.eu'], cc: [], attachments: [],
+      subject: 'Ново съобщение в Системата за сигурно електронно връчване', body: 'Получихте ново съобщение от СТОЛИЧНА ОБЩИНА. Влезте в профила си, за да го прочетете.' },
+    { graphId: 's2', messageId: '<s2@x>', at: ago(9), from: 'spam@example.org', fromName: '', to: ['priemna@zdoi.eu'], cc: [], attachments: [],
+      subject: 'ССЕВ: Столична община', body: 'фалшиво' });
+  const run = await pollMail(makeApp(env, env.__store, env.__kv, null), { manual: true });
+  assert.equal(run.saved, 2);
+  assert.equal(run.matched, 1);
+  const g = await admin.call('req.get', { regNo });
+  const m = g.mail.find(x => x.direction === 'Входяща');
+  assert.equal(m.channel, 'Сигурно електронно връчване');
+  assert.match(m.matched, /ССЕВ: Столична община/);
+  assert.ok(g.events.some(e => e.kind === 'Съобщение в ССЕВ'));
+  const inbox = await admin.call('mail.inbox');
+  assert.equal(inbox.mail.length, 1);
+  assert.equal(inbox.mail[0].channel, 'Имейл');
+});

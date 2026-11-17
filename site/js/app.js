@@ -1080,6 +1080,7 @@ async function requestView(regNo) {
       edit && !x.sentAt && !x.payload._sig ? h('button', { class: 'btn sm', onclick: () => docEditor(d, x.kind, x) }, 'Редактирай') : null,
       edit && !x.sentAt && !x.payload._sig && x.fileId && x.kind !== 'Досие' ? h('button', { class: 'btn sm', onclick: () => kepSign(d, x) }, '✍ Подпиши с КЕП') : null,
       edit && x.fileId ? h('button', { class: 'btn sm primary', onclick: () => composeDialog(d, { docs: [x.outNo] }) }, 'Изпрати по имейл') : null,
+      edit && x.fileId ? h('button', { class: 'btn sm', title: 'Подаване от профила на Сдружението в ССЕВ (edelivery.egov.bg)', onclick: () => ssevDialog(d, x) }, 'Подай през ССЕВ') : null,
       edit ? h('button', { class: 'btn sm', title: 'ССЕВ, поща, лично в деловодството, платформата по чл. 15в', onclick: () => recordDialog(d, 'Изходяща', [x.outNo]) }, 'Друг начин…') : null))));
   const regenerate = async x => {
     try {
@@ -1289,6 +1290,48 @@ async function kepSign(d, x) {
       } catch (e) { step.className = 'err'; step.textContent = e.message; go.disabled = false; }
     };
   } catch (e) { fail(e.name === 'AbortError' ? 'BISS не отговори навреме.' : e.message); }
+}
+
+/* ---------- подаване през ССЕВ от профила на Сдружението (без API: файлът и текстът се подготвят, номерът се записва) ---------- */
+
+const SSEV_URL = 'https://edelivery.egov.bg/';
+
+function ssevDialog(d, x) {
+  const r = d.request, ent = r.entity || {}, sig = x.payload._sig;
+  const subject = '[' + r.regNo + '] ' + x.kind + ' изх. № ' + x.outNo + (r.title ? ' – ' + r.title : '');
+  const text = 'Уважаеми господин/госпожо,\n\nПриложено подаваме ' + x.kind.toLowerCase() + ' изх. № ' + x.outNo +
+    (r.mode === 'Клиент' ? ' от името на ' + (r.applicant.name || '') + ' чрез ' + boot.org.name + ' като пълномощник' : '') + '.\n\n' +
+    'Молим отговорите и решенията по преписката да бъдат изпращани чрез ССЕВ до профила на ' + boot.org.name + ' или на имейл ' + d.replyTo + '.\n\n' +
+    'С уважение,\n' + (boot.org.rep ? boot.org.rep + '\n' : '') + boot.org.name;
+  const copy = (val, label) => h('button', { type: 'button', class: 'btn sm', onclick: async () => {
+    try { await navigator.clipboard.writeText(val); toast(label + ' е копиран.'); } catch (_) { toast('Копирането не е разрешено – маркирайте текста ръчно.'); }
+  } }, 'Копирай');
+  const idText = ent.eik ? Docs.idLabel(ent.regBasis) + ' ' + ent.eik : '';
+  const pdfName = x.outNo + ' ' + x.kind + (sig ? ' (подписан)' : '') + '.pdf';
+  const steps = h('ol', { class: 'stack ssev-steps' },
+    h('li', null, h('b', null, 'Свалете документа'), h('br'), sig ? h('span', { class: 'small muted' }, 'Подписан с КЕП от ' + sig.name + '.') : h('span', { class: 'small warn-text' }, 'Документът не е подписан с КЕП. Съобщението в ССЕВ е от профила на Сдружението, но подписаният файл е по-сигурен като доказателство.'),
+      h('div', { class: 'actions mt-8' }, h('button', { type: 'button', class: 'btn sm primary', onclick: async () => { try { const f = await api('doc.download', { outNo: x.outNo }); downloadB64(pdfName, f.data, 'application/pdf'); } catch (e) { toast(e.message); } } }, 'Свали ' + pdfName),
+        !sig ? h('button', { type: 'button', class: 'btn sm', onclick: () => { dlg.close(); kepSign(d, x); } }, '✍ Първо подпиши с КЕП') : null)),
+    h('li', null, h('b', null, 'Влезте в ССЕВ с КЕП и изберете профила на Сдружението'), h('div', { class: 'actions mt-8' }, h('a', { class: 'btn sm', href: SSEV_URL, target: '_blank', rel: 'noopener' }, 'Отвори edelivery.egov.bg'))),
+    h('li', null, h('b', null, 'Ново съобщение до получателя'), h('br'), h('span', null, ent.name || '—'), idText ? [h('br'), h('span', { class: 'mono small' }, idText), ' ', copy(ent.eik, 'Номерът')] : h('span', { class: 'small muted' }, ' (без ЕИК/БУЛСТАТ в преписката – потърсете по наименование)')),
+    h('li', null, h('b', null, 'Тема и текст'), h('div', { class: 'pre small ssev-box' }, subject), h('div', { class: 'actions mt-8' }, copy(subject, 'Темата')),
+      h('div', { class: 'pre small ssev-box' }, text), h('div', { class: 'actions mt-8' }, copy(text, 'Текстът'))),
+    h('li', null, h('b', null, 'Прикачете свалeния PDF и изпратете')));
+  const form = h('form', null, steps,
+    h('h3', { class: 'mt-16' }, 'След изпращането'),
+    h('div', { class: 'form-grid' },
+      field({ k: 'ref', label: 'Номер (идентификатор) на съобщението в ССЕВ', req: true, max: 120 }),
+      field({ k: 'date', label: 'Дата на изпращане', type: 'date', req: true, maxValue: todayIso() }, todayIso())),
+    h('p', { class: 'note' }, 'Отговорите идват по имейл: ССЕВ изпраща известие на имейла на профила, системата го разпознава и отбелязва в преписката. Задайте priemna@zdoi.eu като имейл за известия в профила.'),
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn', onclick: () => dlg.close() }, 'Затвори'), h('button', { type: 'submit', class: 'btn primary' }, 'Отбележи като подадено')));
+  const dlg = dialog('Подаване през ССЕВ – ' + x.kind + ' ' + x.outNo, form, { wide: true });
+  onSubmit(form, async v => {
+    await api('mail.record', { regNo: r.regNo, direction: 'Изходяща', channel: 'Сигурно електронно връчване', date: v.date, ref: v.ref, party: ent.name + (idText ? ', ' + idText : ''),
+      subject, note: 'Подадено от профила на ' + boot.org.name + ' в ССЕВ.', docs: [x.outNo] });
+    dlg.close();
+    toast('Подаването през ССЕВ е отбелязано.');
+    requestView(r.regNo);
+  });
 }
 
 /* ---------- имейл от приемната ---------- */
