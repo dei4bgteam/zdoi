@@ -86,7 +86,13 @@ function correspondence(p) {
 
 function signature(p) {
   const o = p.org, a = p.applicant || {}, electronic = p.signMode === 'electronic';
-  const line = electronic ? { text: 'Подписано с квалифициран електронен подпис.', fontSize: 9, color: GRAY, margin: [0, 0, 0, 20] } : { text: '....................................', margin: [0, 10, 0, 0] };
+  // при подписване с КЕП: печат с името от сертификата (самият подпис е вграден в PDF файла)
+  const line = p.kep ? { margin: [0, 2, 0, 8], table: { widths: ['*'], body: [[{ stack: [
+    { text: 'Подписано с квалифициран електронен подпис', fontSize: 8.5, bold: true, color: BLUE },
+    { text: p.kep.name, fontSize: 9 },
+    { text: [p.kep.issuer ? 'издател: ' + p.kep.issuer : '', p.kep.at ? ' · ' + fmtTime(p.kep.at) : ''].join(''), fontSize: 7.5, color: GRAY }
+  ], margin: [4, 3, 4, 3] }]] }, layout: { hLineColor: () => LINE, vLineColor: () => LINE, hLineWidth: () => 0.8, vLineWidth: () => 0.8 } }
+    : electronic ? { text: 'Подписано с квалифициран електронен подпис.', fontSize: 9, color: GRAY, margin: [0, 0, 0, 20] } : { text: '....................................', margin: [0, 10, 0, 0] };
   // без въведен представител се подписва Сдружението, без да се повтаря наименованието
   const signer = o.rep ? [{ text: o.rep, bold: true }, { text: (o.repPosition ? o.repPosition + ', ' : '') + o.name, fontSize: 9, color: GRAY }] : [{ text: o.name, bold: true }];
   const who = p.mode === 'Клиент' ? [{ text: 'За заявителя ' + (a.name || '') + ',' }, { text: 'чрез пълномощник:' }, ...signer] : signer;

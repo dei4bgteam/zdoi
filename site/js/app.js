@@ -1,8 +1,9 @@
-/* ADM ЗДОИ4You – интерфейс. Всички данни се вмъкват с textContent, без innerHTML. */
+/* ADM ЗДОИ4You – интерфейс. Всички данни се вмъкват с textContent; innerHTML само за вградените иконки (константи). */
 
 import { term, termMonths, daysBetween } from './calendar.js';
 import * as Docs from './docs.js';
 import { addressPicker } from './address.js';
+import * as Kep from './kep.js';
 
 const API = '/api';
 const SESSION_MIN = 30;
@@ -1069,14 +1070,18 @@ async function requestView(regNo) {
   /* документи */
   const docRows = d.docs.map(x => h('tr', null,
     h('td', { class: 'mono' }, x.outNo), h('td', null, x.kind), h('td', null, fmtDate(x.date)),
-    h('td', null, x.sentAt ? h('span', { class: 'small' }, whenOf(x.sentAt), h('br'), x.sentTo) : h('span', { class: 'pill' }, 'неизпратен')),
+    h('td', null, x.sentAt ? h('span', { class: 'small' }, whenOf(x.sentAt), h('br'), x.sentTo) : h('span', { class: 'pill' }, 'неизпратен'),
+      x.payload._sig ? [h('br'), h('span', { class: 'pill ok', title: 'Издател: ' + x.payload._sig.issuer + (x.payload._sig.qualified ? ' · квалифициран' : '') + ' · ' + fmtTime(x.payload._sig.at) }, '✍ КЕП: ' + x.payload._sig.name)] : null),
     h('td', null, h('div', { class: 'actions' },
       h('button', { class: 'btn sm', onclick: () => regenerate(x) }, 'PDF'),
-      edit && !x.sentAt ? h('button', { class: 'btn sm', onclick: () => docEditor(d, x.kind, x) }, 'Редактирай') : null,
+      edit && !x.sentAt && !x.payload._sig ? h('button', { class: 'btn sm', onclick: () => docEditor(d, x.kind, x) }, 'Редактирай') : null,
+      edit && !x.sentAt && !x.payload._sig && x.fileId && x.kind !== 'Досие' ? h('button', { class: 'btn sm', onclick: () => kepSign(d, x) }, '✍ Подпиши с КЕП') : null,
       edit && x.fileId ? h('button', { class: 'btn sm primary', onclick: () => composeDialog(d, { docs: [x.outNo] }) }, 'Изпрати по имейл') : null,
       edit ? h('button', { class: 'btn sm', title: 'ССЕВ, поща, лично в деловодството, платформата по чл. 15в', onclick: () => recordDialog(d, 'Изходяща', [x.outNo]) }, 'Друг начин…') : null))));
   const regenerate = async x => {
     try {
+      // подписаният файл се сваля такъв, какъвто е – новото генериране би премахнало подписа
+      if (x.payload._sig) { const f = await api('doc.download', { outNo: x.outNo }); return downloadB64(x.outNo + ' ' + x.kind + ' (подписан).pdf', f.data, 'application/pdf'); }
       const p = Object.assign({}, x.payload, { outNo: x.outNo, date: x.date });
       await Docs.open(Docs.DEFS[x.kind](p), x.outNo + ' ' + x.kind + '.pdf');
     } catch (e) { toast(e.message); }
@@ -1194,6 +1199,60 @@ function docEditor(d, kind, existing) {
     h('button', { type: 'button', class: 'btn primary', onclick: async e => { e.target.disabled = true; try { await save(form, 'send'); } catch (ex) { toast(ex.message); status.textContent = ex.message; } finally { e.target.disabled = false; } } }, 'Запиши и изпрати')));
   const dlg = dialog((existing ? 'Редакция: ' : 'Ново: ') + kind + (existing ? ' ' + existing.outNo : ''), form, { wide: true });
   onSubmit(form, async () => { await save(form, 'download'); });
+}
+
+/* ---------- подпис с КЕП (смарт карта през B-Trust BISS) ---------- */
+
+const BISS_URL = 'https://www.b-trust.bg/services/software';
+
+async function kepSign(d, x) {
+  const r = d.request;
+  const status = h('p', { class: 'small muted' }, 'Търсене на BISS на този компютър…');
+  const body = h('div', { class: 'stack' }, status);
+  const close = h('button', { type: 'button', class: 'btn', onclick: () => dlg.close() }, 'Затвори');
+  const dlg = dialog('Подпис с КЕП – ' + x.kind + ' изх. № ' + x.outNo, h('div', null, body, h('div', { class: 'actions mt-12' }, close)), {});
+  const fail = (msg, extra) => { body.replaceChildren(h('p', { class: 'err' }, msg), extra || ''); };
+  try {
+    const biss = await Kep.findBiss();
+    if (!biss) {
+      return fail('Не е намерена програмата за подписване BISS.', h('div', { class: 'stack' },
+        h('p', null, 'За подписване с КЕП на смарт карта е нужна безплатната програма B-Trust BISS. Тя работи и с карти на InfoNotary, StampIT и други доставчици.'),
+        h('ol', { class: 'small' }, h('li', null, 'Изтеглете и инсталирайте BISS (нужни са администраторски права).'), h('li', null, 'Включете четеца с картата и стартирайте BISS (иконка до часовника).'),
+          h('li', null, 'Ако картата не е от B-Trust, инсталирайте и удостоверителните вериги на вашия доставчик.'), h('li', null, 'Ако браузърът попита за достъп до устройства в локалната мрежа – разрешете.')),
+        h('a', { class: 'btn primary', href: BISS_URL, target: '_blank', rel: 'noopener' }, 'Изтегли BISS')));
+    }
+    status.textContent = 'BISS ' + biss.version + ' е намерен. Изберете сертификата от картата в прозореца на BISS…';
+    const signer = await Kep.chooseSigner(biss.port);
+    const c = signer.cert;
+    const go = h('button', { type: 'button', class: 'btn primary' }, '✍ Подпиши');
+    body.replaceChildren(kv([
+      ['Подписващ', c.name], c.org ? ['Организация', c.org] : null, ['Издател', c.issuerName],
+      ['Вид', c.qualified ? 'Квалифициран електронен подпис' : 'Електронен подпис (не е отбелязан като квалифициран)'],
+      ['Валиден до', c.notAfter ? c.notAfter.toLocaleDateString('bg-BG') : '—']
+    ]), c.qualified ? null : h('p', { class: 'note' }, 'Сертификатът не съдържа отметка за квалифициран подпис. Проверете дали е избран правилният сертификат.'),
+    h('p', { class: 'small muted' }, 'В PDF-а ще бъде поставен печат с името от сертификата, а подписът ще бъде вграден във файла (PAdES). След подписване документът не може да се редактира.'), h('div', { class: 'actions' }, go));
+    go.onclick = async () => {
+      go.disabled = true;
+      const step = h('p', { class: 'small' }, '');
+      body.append(step);
+      try {
+        step.textContent = 'Генериране на документа с печата…';
+        const p = Object.assign({}, x.payload, { outNo: x.outNo, date: x.date, kep: { name: c.name + (c.org ? ', ' + c.org : ''), issuer: c.issuerName, at: new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Sofia' }).replace(' ', 'T') } });
+        const pdfBytes = new Uint8Array(await (await Docs.blobOf(Docs.DEFS[x.kind](p))).arrayBuffer());
+        const signed = await Kep.signPdf({
+          port: biss.port, signer, pdfBytes, outNo: x.outNo, onStep: t => { step.textContent = t; },
+          authorize: content => api('kep.authorize', { outNo: x.outNo, content })
+        });
+        step.textContent = 'Проверка и записване…';
+        let bin = '';
+        for (let i = 0; i < signed.length; i += 0x8000) bin += String.fromCharCode.apply(null, signed.subarray(i, i + 0x8000));
+        const res = await api('kep.complete', { outNo: x.outNo, pdf: btoa(bin) });
+        dlg.close();
+        toast('Подписано от ' + res.signature.name + '.');
+        requestView(r.regNo);
+      } catch (e) { step.className = 'err'; step.textContent = e.message; go.disabled = false; }
+    };
+  } catch (e) { fail(e.name === 'AbortError' ? 'BISS не отговори навреме.' : e.message); }
 }
 
 /* ---------- имейл от приемната ---------- */
@@ -1382,6 +1441,22 @@ async function mailInboxView() {
 
 /* ---------- системни процеси ---------- */
 
+/* КЕП: сертификатът, с който системата разрешава заявките към BISS (Let's Encrypt, подновява се сам) */
+function kepCard() {
+  const card = h('section', { class: 'card stack' }, h('h2', null, 'Подпис с КЕП'), h('p', { class: 'loading' }, 'Зареждане…'));
+  const render = s => card.replaceChildren(h('h2', null, 'Подпис с КЕП'), kv([
+    ['Програма на компютрите', 'B-Trust BISS (работи с карти на всички български доставчици)'],
+    ['Сертификат на системата', s.has ? 'валиден до ' + fmtDate(s.notAfter) + ' (Let’s Encrypt, подновява се автоматично)' : 'още не е издаден'],
+    ['Последен опит', s.last ? fmtTime(s.last.at.replace('Z', '')) + (s.last.error ? ' – грешка: ' + s.last.error : ' – успешен') : '—']
+  ]), h('p', { class: 'small muted' }, 'С него системата потвърждава пред BISS, че заявката за подпис идва от adm.zdoi.eu. Подписът на документите е с картата на служителя.'),
+  h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: async e => {
+    e.target.disabled = true;
+    try { const r = await api('kep.renew'); toast(r.error ? 'Грешка: ' + r.error : 'Сертификатът е подновен до ' + fmtDate(r.notAfter) + '.'); render(r); } catch (ex) { toast(ex.message); } finally { e.target.disabled = false; }
+  } }, 'Поднови сега')));
+  api('kep.status').then(render).catch(e => card.replaceChildren(h('h2', null, 'Подпис с КЕП'), h('p', { class: 'err' }, e.message)));
+  return card;
+}
+
 /* настройки за вход с Google, Microsoft и Discord */
 function oauthCard() {
   const card = h('section', { class: 'card stack' }, h('h2', null, 'Вход с външни профили'), h('p', { class: 'loading' }, 'Зареждане…'));
@@ -1436,6 +1511,7 @@ async function systemView() {
           h('button', { class: 'btn primary', onclick: async e => { e.target.disabled = true; try { const r = (await api('system.poll')).run; toast(r.error ? 'Грешка: ' + r.error : `Нови писма: ${r.saved}, разпределени: ${r.matched}.`); systemView(); } catch (ex) { toast(ex.message); } finally { e.target.disabled = false; } } }, 'Провери пощата сега'),
           h('a', { class: 'btn', href: '#/mail' }, 'Неразпределени'))),
       oauthCard(),
+      kepCard(),
       h('section', { class: 'card stack' }, h('h2', null, 'Номерация и срокове'), kv([
         ['Следващ Изх. №', s.nextOutNo], ['Номер на преписка', 'П-ГГГГ-NNNN (изходящи), ВХ-ГГГГ-NNNN (входящ регистър)'],
         ['Напомняния за срокове', 'всеки ден след 8:00 ч. (днес: ' + s.lastReminder + ')']])),

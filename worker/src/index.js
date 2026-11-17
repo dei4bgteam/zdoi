@@ -18,6 +18,8 @@ import * as users from './users.js';
 import * as cases from './cases.js';
 import * as reqs from './requests.js';
 import * as oauth from './oauth.js';
+import * as acme from './acme.js';
+import * as kep from './kep.js';
 import { ROLE_ADMIN } from './config.js';
 
 /* auth: public | user | admin; perm: нужно право; */
@@ -69,6 +71,10 @@ export const ACTIONS = {
   'doc.reserve': { auth: 'user', perm: 'casesEdit', fn: reqs.docReserve },
   'doc.file': { auth: 'user', perm: 'casesEdit', big: true, fn: reqs.docFile },
   'doc.download': { auth: 'user', fn: reqs.docDownload },
+  'kep.authorize': { auth: 'user', perm: 'casesEdit', fn: kep.kepAuthorize },
+  'kep.complete': { auth: 'user', perm: 'casesEdit', big: true, fn: kep.kepComplete },
+  'kep.status': { auth: 'admin', fn: kep.kepStatus },
+  'kep.renew': { auth: 'admin', fn: kep.kepRenew },
   'mail.send': { auth: 'user', perm: 'casesEdit', fn: reqs.mailSend },
   'mail.record': { auth: 'user', perm: 'casesEdit', big: true, fn: reqs.mailRecord },
   'mail.inbox': { auth: 'user', fn: reqs.mailInbox },
@@ -211,6 +217,10 @@ export default {
     if (path === '/api/health') return json({ ok: true, service: 'adm-zdoi', store: env.STORE === 'memory' ? 'memory' : 'sharepoint' });
     if (path === '/api/setup') return handleSetup(req, env);
     if (path === '/api') return handleApi(req, env);
+    if (path.startsWith('/.well-known/acme-challenge/')) {
+      const { store, kv } = services(env);
+      return acme.challenge(makeApp(env, store, kv, req), path.split('/').pop());
+    }
     if (path.startsWith('/api/oauth/')) {
       const { store, kv } = services(env);
       return oauth.handleOAuth(req, makeApp(env, store, kv, req), cookie);
@@ -222,6 +232,7 @@ export default {
     const app = makeApp(env, store, kv, null);
     // пощата на приемната – на всеки 5 минути; напомнянията – веднъж на ден след 8:00 ч.
     ctx.waitUntil(reqs.pollMail(app).then(r => console.log('поща', JSON.stringify(r)))
-      .then(() => cases.remindDeadlines(app)).then(r => console.log('напомняния', JSON.stringify(r))));
+      .then(() => cases.remindDeadlines(app)).then(r => console.log('напомняния', JSON.stringify(r)))
+      .then(() => acme.ensureCert(app)).then(r => console.log('сертификат за КЕП', JSON.stringify(r))));
   }
 };

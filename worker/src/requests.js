@@ -249,6 +249,7 @@ export async function docReserve(d, ctx, app) {
     const doc = (await app.store.list('docs', { outNo: line(d.outNo, 30) }))[0];
     if (!doc || doc.regNo !== r.regNo) fail('notfound', 'Документът не е намерен.');
     if (doc.sentAt) fail('value', 'Документът вече е изпратен и не се променя. Създайте нов.');
+    if (/"_sig"\s*:/.test(doc.payload || '')) fail('value', 'Документът е подписан с КЕП и не се променя. Създайте нов.');
     await app.store.patch('docs', doc._id, { payload, title });
     await event(app, r.regNo, ctx.username, 'Документ', 'Редактиран: ' + doc.kind + ' изх. № ' + doc.outNo);
     return { outNo: doc.outNo, date: doc.date };

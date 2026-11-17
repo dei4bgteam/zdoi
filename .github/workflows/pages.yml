@@ -28,7 +28,7 @@ jobs:
         run: |
           V=${GITHUB_SHA::8}
           sed -i "s/?v=dev/?v=$V/g" site/*.html
-          sed -i "s#from './calendar.js'#from './calendar.js?v=$V'#" site/js/app.js
+          sed -i -E "s#(from '\./[a-z0-9-]+\.js)'#\1?v=$V'#g" site/js/*.js
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }

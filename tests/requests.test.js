@@ -65,11 +65,12 @@ test('входяща поща: етикет след „+“, номер в те
   const { regNo: second } = await admin.call('req.create', reqData());
   await admin.call('req.assign', { regNo: second, owner: 'admin' });
   const base = { cc: [], body: 'Отговор', fromName: 'Деловодство', attachments: [] };
+  const ago = m => new Date(Date.now() - m * 60000).toISOString().slice(0, 19) + 'Z';
   box.inbox.push(
-    Object.assign({}, base, { graphId: 'g1', messageId: '<1@x>', at: '2026-11-16T10:00:00Z', from: 'obshtina@example.org', to: ['priemna+' + tagOf(regNo) + '@zdoi.eu'], subject: 'Re: заявление',
+    Object.assign({}, base, { graphId: 'g1', messageId: '<1@x>', at: ago(30), from: 'obshtina@example.org', to: ['priemna+' + tagOf(regNo) + '@zdoi.eu'], subject: 'Re: заявление',
       attachments: [{ name: 'решение.pdf', contentType: 'application/pdf', bytes: new Uint8Array([37, 80, 68, 70]) }] }),
-    Object.assign({}, base, { graphId: 'g2', messageId: '<2@x>', at: '2026-11-16T10:05:00Z', from: 'other@example.org', to: ['priemna@zdoi.eu'], subject: 'Относно ' + second }),
-    Object.assign({}, base, { graphId: 'g3', messageId: '<3@x>', at: '2026-11-16T10:06:00Z', from: 'spam@example.org', to: ['priemna@zdoi.eu'], subject: 'Здравейте' })
+    Object.assign({}, base, { graphId: 'g2', messageId: '<2@x>', at: ago(25), from: 'other@example.org', to: ['priemna@zdoi.eu'], subject: 'Относно ' + second }),
+    Object.assign({}, base, { graphId: 'g3', messageId: '<3@x>', at: ago(24), from: 'spam@example.org', to: ['priemna@zdoi.eu'], subject: 'Здравейте' })
   );
   const app = makeApp(env, env.__store, env.__kv, null);
   const run = await pollMail(app, { manual: true });

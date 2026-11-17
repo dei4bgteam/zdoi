@@ -5,7 +5,9 @@ compatibility_date = "2025-09-01"
 workers_dev = false
 
 routes = [
-  { pattern = "adm.zdoi.eu/api*", zone_name = "zdoi.eu" }
+  { pattern = "adm.zdoi.eu/api*", zone_name = "zdoi.eu" },
+  # проверка от Let's Encrypt за сертификата, с който се подписват заявките към B-Trust BISS (КЕП)
+  { pattern = "adm.zdoi.eu/.well-known/acme-challenge/*", zone_name = "zdoi.eu" }
 ]
 
 # входяща поща на приемната – на 5 минути; напомняния за срокове – веднъж на ден след 8:00 ч.
