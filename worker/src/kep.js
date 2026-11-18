@@ -209,3 +209,117 @@ export async function kepLink(d, ctx, app) {
   await audit(app, ctx.username, 'Свързан вход с КЕП', '', p.cert.name + ' · ' + p.cert.issuerName);
   return { name: p.cert.name };
 }
+
+/* ---------- проверка на КЕП (страница „Проверка на КЕП“) ----------
+ * Доклад, не отказ: всяка проверка поотделно (✔/✖), за произволен подписан PDF, за сертификат от картата и за тестов подпис.
+ */
+
+const SIGNING_TIME = '1.2.840.113549.1.9.5';
+const sofia = d => (isNaN(d) ? '' : d.toLocaleString('sv-SE', { timeZone: 'Europe/Sofia' }).replace(' ', 'T'));
+
+/* /M (D:YYYYMMDDHHmmSS+HH'mm'), вкл. с осмични escape-и (напр. „\072“ вместо „:“), както пишат някои програми */
+function pdfDate(win) {
+  const m = /\/M\s*\(((?:[^)\\]|\\.)*)\)/.exec(win);
+  if (!m) return '';
+  const s = m[1].replace(/\\([0-7]{1,3})/g, (x, o) => String.fromCharCode(parseInt(o, 8))).replace(/\\(.)/g, '$1');
+  const d = /D:(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(Z|[+-]\d{2}'?\d{2})?/.exec(s);
+  if (!d) return '';
+  const tz = !d[7] || d[7] === 'Z' ? 'Z' : d[7].slice(0, 3) + ':' + d[7].replace("'", '').slice(3, 5);
+  return sofia(new Date(`${d[1]}-${d[2]}-${d[3]}T${d[4]}:${d[5]}:${d[6]}${tz}`));
+}
+
+function asn1Time(n) {
+  // UTCTime (0x17) – година с 2 цифри, GeneralizedTime (0x18) – с 4
+  const s = new TextDecoder().decode(n.body), m = (n.tag === 0x18 ? /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/ : /^(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/).exec(s);
+  if (!m) return '';
+  const y = m[1].length === 2 ? (+m[1] < 50 ? 2000 : 1900) + +m[1] : +m[1];
+  return sofia(new Date(Date.UTC(y, m[2] - 1, +m[3], +m[4], +m[5], +m[6])));
+}
+
+/* данните за сертификата + регистъра на доставчика */
+async function certReport(cert, chain) {
+  const now = new Date();
+  const rev = await checkRevocation(cert, chain);
+  return {
+    name: cert.name, org: cert.org, id: maskId(cert.id), email: cert.email, issuer: cert.issuerName,
+    notBefore: cert.notBefore ? cert.notBefore.toISOString() : '', notAfter: cert.notAfter ? cert.notAfter.toISOString() : '',
+    inDate: !!(cert.notAfter && cert.notBefore && cert.notBefore <= now && cert.notAfter >= now),
+    qualified: cert.qualified, sscd: cert.sscd, nonRepudiation: cert.nonRepudiation,
+    keyAlg: cert.keyAlg === D.OID.ec ? 'EC ' + (cert.curve === D.OID.p384 ? 'P-384' : 'P-256') : 'RSA',
+    rev: { status: rev.status, method: rev.method || '', url: rev.url || '', note: rev.note || '', reason: rev.reason || '', revokedAt: rev.revokedAt ? new Date(rev.revokedAt).toISOString() : '', issuerFound: !/издателят/.test(rev.note || '') }
+  };
+}
+
+/* всички подписи в PDF: цялост, подпис, обхват, време, сертификат и регистър */
+export async function analyzePdf(pdf) {
+  const latin = new TextDecoder('latin1').decode(pdf);
+  const re = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(latin))) {
+    const [a, b, c, len] = m.slice(1).map(Number);
+    const s = { byteRange: [a, b, c, len], checks: {} };
+    try {
+      if (b >= c || c + len > pdf.length) throw new Error('невалиден ByteRange');
+      s.checks.coversAll = a === 0 && c + len === pdf.length;
+      const hexStr = latin.slice(b + 1, c - 1).replace(/(00)+$/, '');
+      const cms = new Uint8Array(hexStr.length / 2 | 0);
+      for (let i = 0; i < cms.length; i++) cms[i] = parseInt(hexStr.substr(i * 2, 2), 16);
+      const sd = D.parseSignedData(D.read(cms).raw);
+      const signed = D.concat([pdf.subarray(a, a + b), pdf.subarray(c, c + len)]);
+      s.checks.integrity = !!sd.digest && eq(sd.digest, new Uint8Array(await crypto.subtle.digest('SHA-256', signed)));
+      const certDer = sd.certs.find(x => { try { return eq(D.parseCert(x).serial, sd.sidSerial); } catch (_) { return false; } });
+      if (!certDer) throw new Error('липсва сертификатът на подписващия');
+      const cert = D.parseCert(certDer);
+      const ec = cert.keyAlg === D.OID.ec;
+      s.checks.signature = await verifySig(cert.spki, ec ? (sd.sigAlg === D.OID.ecdsaSha384 ? D.OID.ecdsaSha384 : D.OID.ecdsaSha256) : D.OID.sha256Rsa, sd.signature, sd.attrsDer);
+      // време: атрибут signingTime или /M на подписа (за PAdES – /M)
+      const attrs = D.read(sd.attrsDer).children;
+      const st = attrs.find(x => D.oidStr(x.children[0].body) === SIGNING_TIME);
+      // речникът на подписа без самия /Contents (той е десетки KB)
+      const win = latin.slice(Math.max(0, Math.min(m.index, b) - 3000), b) + latin.slice(c, c + 3000);
+      const mm = pdfDate(win);
+      s.time = st ? asn1Time(st.children[1].children[0]) : mm;
+      s.timeSource = st ? 'signingTime' : mm ? '/M (часовник на подписващия)' : '';
+      s.subFilter = (/\/SubFilter\s*\/([A-Za-z0-9.]+)/.exec(win) || [])[1] || '';
+      s.cert = await certReport(cert, sd.certs);
+      s.ok = s.checks.integrity && s.checks.signature && s.cert.inDate && s.cert.rev.status !== 'revoked';
+    } catch (e) { s.error = String(e.message || e).slice(0, 200); s.ok = false; }
+    out.push(s);
+  }
+  return out;
+}
+
+export async function kepVerify(d, ctx, app) {
+  const pdf = fromB64(String(d.pdf || ''));
+  if (pdf.length < 100 || pdf.length > MAX_PDF || String.fromCharCode(...pdf.slice(0, 4)) !== '%PDF') fail('value', 'Изберете PDF файл до 8 MB.');
+  const t = await throttle(app, 'kepverify|' + ctx.username, 60);
+  if (await t.blocked()) fail('locked', 'Твърде много проверки. Опитайте след 15 минути.');
+  await t.hit();
+  const sigs = await analyzePdf(pdf);
+  await audit(app, ctx.username, 'Проверка на подписан PDF', '', sigs.length + ' подписа');
+  return { signatures: sigs, size: pdf.length };
+}
+
+/* сертификатът от картата (без ПИН) */
+export async function kepCheckCert(d, ctx, app) {
+  const chain = (Array.isArray(d.chain) ? d.chain : []).slice(0, 6).map(x => D.unb64(String(x)));
+  if (!chain.length) fail('value', 'Липсва сертификат.');
+  let cert;
+  try { cert = D.parseCert(chain[0]); } catch (_) { fail('value', 'Сертификатът не може да бъде разчетен.'); }
+  return { cert: await certReport(cert, chain.slice(1)) };
+}
+
+/* тестов подпис: разрешение за BISS без документ в преписка */
+export async function kepTestAuthorize(d, ctx, app) {
+  const content = D.unb64(String(d.content || ''));
+  if (content.length < 50 || content.length > 4096 || content[0] !== 0x31) fail('value', 'Невалидни данни за подпис.');
+  const t = await throttle(app, 'keptest|' + ctx.username, 20);
+  if (await t.blocked()) fail('locked', 'Твърде много тестови подписи. Опитайте след 15 минути.');
+  await t.hit();
+  const c = await signingCert(app);
+  if (!c) fail('setup', 'Сертификатът на системата за КЕП още не е издаден.');
+  const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', c.key, new Uint8Array(await crypto.subtle.digest('SHA-256', content))));
+  await audit(app, ctx.username, 'Тестов подпис с КЕП', '', '');
+  return { signedContents: D.b64(sig), signedContentsCert: c.chain[0] };
+}

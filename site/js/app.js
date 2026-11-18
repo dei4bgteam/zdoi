@@ -202,6 +202,7 @@ const NAV = () => [
   ['#/addressees', 'Адресати', true],
   ['#/calc', 'Срокове', true],
   ['#/departments', 'Отдели', true],
+  ['#/kep', 'Проверка на КЕП', true],
   ['#/users', 'Потребители', me.role === 'Администратор'],
   ['#/system', 'Система', me.role === 'Администратор'],
   ['#/log', 'Дневник', !!me.perms.log],
@@ -1334,6 +1335,110 @@ function ssevDialog(d, x) {
   });
 }
 
+/* ---------- страница „Проверка на КЕП“: сертификатът от картата, тестов подпис, проверка на подписан PDF ---------- */
+
+const yes = (ok, text, warn) => h('span', { class: 'pill ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'warn') }, (ok === true ? '✔ ' : ok === false ? '✖ ' : '! ') + text + (warn ? '' : ''));
+const isoDay = s => (s ? fmtDate(s) : '—');
+
+function revPill(r) {
+  if (!r) return yes(null, 'не е проверено');
+  if (r.status === 'good') return yes(true, 'валидно според ' + r.method + ' на доставчика');
+  if (r.status === 'revoked') return yes(false, 'ПРЕКРАТЕНО/СПРЯНО' + (r.reason ? ' (' + r.reason + ')' : '') + (r.revokedAt ? ' от ' + fmtTime(r.revokedAt) : '') + ' – ' + r.method);
+  return yes(null, 'не е проверено' + (r.note ? ': ' + r.note : ''));
+}
+
+function certTable(c) {
+  return kv([
+    ['Титуляр', c.name + (c.org ? ' · ' + c.org : '')],
+    c.id ? ['Идентификатор', c.id] : null,
+    ['Издател', c.issuer],
+    ['Валидност', h('span', null, isoDay(c.notBefore) + ' – ' + isoDay(c.notAfter) + ' ', yes(c.inDate, c.inDate ? 'в срок' : 'извън срока'))],
+    ['Квалифициран (QcCompliance)', yes(c.qualified, c.qualified ? 'да' : 'не е отбелязан')],
+    ['Квалифицирано устройство (QSCD)', yes(c.sscd ? true : null, c.sscd ? 'да' : 'не е отбелязано')],
+    ['Регистър на доставчика', revPill(c.rev)],
+    ['Ключ', c.keyAlg]
+  ]);
+}
+
+function sigReport(list) {
+  if (!list.length) return h('p', { class: 'err' }, 'Във файла няма електронен подпис.');
+  return h('div', { class: 'stack' }, list.map((s, i) => h('section', { class: 'card stack' },
+    h('div', { class: 'head m-0' }, h('h3', { class: 'm-0' }, 'Подпис ' + (i + 1) + (s.cert ? ': ' + s.cert.name : '')),
+      !s.ok ? yes(false, 'невалиден или с проблем') : s.cert.qualified ? yes(true, 'валиден КЕП') : yes(null, 'валиден подпис, но не е квалифициран (КЕП)')),
+    s.error ? h('p', { class: 'err' }, s.error) : [
+      kv([
+        ['Документът не е променян', yes(s.checks.integrity, s.checks.integrity ? 'хешът съвпада' : 'съдържанието е променено след подписа')],
+        ['Подпис', yes(s.checks.signature, s.checks.signature ? 'математически валиден' : 'невалиден')],
+        ['Обхват', yes(s.checks.coversAll ? true : null, s.checks.coversAll ? 'целият файл' : 'версията до този подпис (файлът е допълван след него)')],
+        ['Време на подписване', s.time ? fmtTime(s.time) + ' · ' + s.timeSource : '—'],
+        ['Формат', s.subFilter || '—']
+      ]),
+      h('h4', { class: 'm-0' }, 'Сертификат'), certTable(s.cert)
+    ])));
+}
+
+async function kepView() {
+  const certOut = h('div', { class: 'stack' }), testOut = h('div', { class: 'stack' }), fileOut = h('div', { class: 'stack' });
+  const findBiss = async out => {
+    out.replaceChildren(h('p', { class: 'small muted' }, 'Търсене на BISS…'));
+    const b = await Kep.findBiss();
+    if (!b) { out.replaceChildren(h('p', { class: 'err' }, 'Не е намерена програмата за подписване BISS.'), bissMissing()); return null; }
+    return b;
+  };
+  const busy = async (btn, out, fn) => { btn.disabled = true; try { await fn(); } catch (e) { out.replaceChildren(h('p', { class: 'err' }, e.name === 'AbortError' ? 'BISS не отговори навреме.' : e.message)); } finally { btn.disabled = false; } };
+
+  const certBtn = h('button', { class: 'btn primary', onclick: () => busy(certBtn, certOut, async () => {
+    const b = await findBiss(certOut); if (!b) return;
+    certOut.replaceChildren(h('p', { class: 'small muted' }, 'Изберете сертификата в прозореца на BISS…'));
+    const signer = await Kep.chooseSigner(b.port);
+    certOut.replaceChildren(h('p', { class: 'small muted' }, 'Проверка при доставчика (OCSP/CRL)…'));
+    const r = await api('kep.checkCert', { chain: signer.chain.map(x => btoaBytes(x)) });
+    certOut.replaceChildren(h('p', { class: 'small muted' }, 'BISS ' + b.version + ' · без въвеждане на ПИН'), certTable(r.cert));
+  }) }, 'Провери сертификата от картата');
+
+  const testBtn = h('button', { class: 'btn primary', onclick: () => busy(testBtn, testOut, async () => {
+    const b = await findBiss(testOut); if (!b) return;
+    testOut.replaceChildren(h('p', { class: 'small muted' }, 'Изберете сертификата в прозореца на BISS…'));
+    const signer = await Kep.chooseSigner(b.port);
+    const c = signer.cert, at = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Sofia' }).replace(' ', 'T');
+    const def = Docs.DEFS['Писмо'](Object.assign({ org: boot.org, entity: { name: 'Тестов получател' }, title: 'Тестово подписване с КЕП', outNo: 'ТЕСТ', date: at.slice(0, 10), signMode: 'electronic',
+      body: 'Това е тестов документ, създаден в ADM ЗДОИ4You за проверка на подписването с квалифициран електронен подпис. Той не е официален документ и не се пази в системата.',
+      kep: { name: c.name + (c.org ? ', ' + c.org : ''), issuer: c.issuerName, at } }));
+    const pdfBytes = new Uint8Array(await (await Docs.blobOf(def)).arrayBuffer());
+    const step = h('p', { class: 'small muted' }, '');
+    testOut.replaceChildren(step);
+    const signed = await Kep.signPdf({ port: b.port, signer, pdfBytes, outNo: 'ТЕСТ', onStep: t => { step.textContent = t; }, authorize: content => api('kep.testAuthorize', { content }) });
+    step.textContent = 'Проверка на подписания файл…';
+    const r = await api('kep.verify', { pdf: btoaBytes(signed) });
+    testOut.replaceChildren(h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => downloadB64('Тестов документ (подписан).pdf', btoaBytes(signed), 'application/pdf') }, 'Свали подписания тестов документ')),
+      h('p', { class: 'small muted' }, 'Може да го отворите и в Adobe Reader или да го качите по-долу за повторна проверка.'), sigReport(r.signatures));
+  }) }, '✍ Подпиши тестов документ');
+
+  const fileIn = h('input', { type: 'file', accept: 'application/pdf' });
+  const fileBtn = h('button', { class: 'btn primary', onclick: () => busy(fileBtn, fileOut, async () => {
+    const f = fileIn.files[0];
+    if (!f) throw new Error('Изберете PDF файл.');
+    if (f.size > 8 * 1048576) throw new Error('Файлът е по-голям от 8 MB.');
+    fileOut.replaceChildren(h('p', { class: 'small muted' }, 'Проверка на подписите и в регистрите на доставчиците…'));
+    const r = await api('kep.verify', { pdf: await readFile64(f) });
+    fileOut.replaceChildren(h('p', { class: 'small muted' }, f.name + ' · ' + Math.round(r.size / 1024) + ' KB · подписи: ' + r.signatures.length), sigReport(r.signatures));
+  }) }, 'Провери');
+
+  setView(head('Проверка на КЕП'), h('div', { class: 'stack' },
+    h('p', { class: 'muted' }, 'Проверките не записват нищо в преписките. Регистърът на доставчика се проверява към днешна дата.'),
+    h('div', { class: 'grid2' },
+      h('section', { class: 'card stack' }, h('h2', null, 'Моят КЕП'), h('p', { class: 'small muted' }, 'Чете сертификата от картата през BISS и проверява срока, квалифицирания статус и регистъра на доставчика. Не изисква ПИН.'), h('div', { class: 'actions' }, certBtn), certOut),
+      h('section', { class: 'card stack' }, h('h2', null, 'Тестово подписване'), h('p', { class: 'small muted' }, 'Подписва примерен документ с картата (ПИН в BISS) и веднага проверява резултата. Документът не се пази.'), h('div', { class: 'actions' }, testBtn), testOut)),
+    h('section', { class: 'card stack' }, h('h2', null, 'Проверка на подписан PDF'), h('p', { class: 'small muted' }, 'Всеки PDF с електронен подпис (PAdES), например получено решение или подписан от нас документ.'),
+      h('div', { class: 'actions' }, fileIn, fileBtn), fileOut)));
+}
+
+function btoaBytes(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
 /* ---------- имейл от приемната ---------- */
 
 function composeDialog(d, { docs = [], reply = null } = {}) {
@@ -1635,6 +1740,7 @@ async function route() {
     case 'logins': return loginsView(parts[1]);
     case 'profile': return profileView();
     case 'calc': return calcView();
+    case 'kep': return kepView();
     case 'requests': return requestsView(query);
     case 'request': return parts[1] === 'new' ? requestEditView(null) : parts[2] === 'edit' ? requestEditView(parts[1]) : requestView(parts[1]);
     case 'mail': return mailInboxView();

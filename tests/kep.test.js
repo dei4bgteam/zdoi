@@ -164,3 +164,41 @@ test('КЕП: заявка без разрешение от сървъра се 
   const r = await admin.call('kep.complete', { outNo, pdf: Buffer.from(pdf).toString('base64') });
   assert.equal(r.error, 'value');
 });
+
+test('проверка на КЕП: тестов подпис, доклад за подписан PDF, подправен и неподписан файл, сертификат от картата', async () => {
+  const { env, admin } = await ready();
+  const serverSpki = await withServerCert(env);
+  fakeBiss('card-rsa', serverSpki);
+  const signer = await chooseSigner(53953);
+  const signed = await signPdf({ port: 53953, signer, pdfBytes: await samplePdf(), outNo: 'ТЕСТ',
+    authorize: async content => { const r = await admin.call('kep.testAuthorize', { content }); if (!r.ok) throw new Error(r.message); return r; } });
+
+  let r = await admin.call('kep.verify', { pdf: Buffer.from(signed).toString('base64') });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.signatures.length, 1);
+  const s = r.signatures[0];
+  assert.equal(s.ok, true, JSON.stringify(s));
+  assert.deepEqual([s.checks.integrity, s.checks.signature, s.checks.coversAll], [true, true, true]);
+  assert.equal(s.cert.name, 'Иван Тестов Иванов');
+  assert.equal(s.cert.qualified, true);
+  assert.equal(s.subFilter, 'ETSI.CAdES.detached');
+  assert.match(s.time, /^\d{4}-\d{2}-\d{2}T/);
+
+  const bad = Uint8Array.from(signed);
+  bad[300] ^= 1;
+  r = await admin.call('kep.verify', { pdf: Buffer.from(bad).toString('base64') });
+  assert.equal(r.signatures[0].checks.integrity, false);
+  assert.equal(r.signatures[0].ok, false);
+
+  r = await admin.call('kep.verify', { pdf: Buffer.from(await samplePdf()).toString('base64') });
+  assert.equal(r.signatures.length, 0);
+  assert.equal((await admin.call('kep.verify', { pdf: Buffer.from('не е pdf').toString('base64') })).error, 'value');
+
+  r = await admin.call('kep.checkCert', { chain: [Buffer.from(CERTS['card-ec'].der).toString('base64')] });
+  assert.equal(r.cert.name, 'Иван Тестов Иванов');
+  assert.equal(r.cert.keyAlg, 'EC P-256');
+  assert.equal(r.cert.inDate, true);
+  assert.equal(r.cert.id, 'PNOBG-80******00');
+
+  assert.equal((await admin.call('kep.testAuthorize', { content: 'MQ==' })).error, 'value');
+});
