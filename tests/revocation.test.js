@@ -151,3 +151,23 @@ test('вход с КЕП: свързване от профила, вход, пр
   await admin.call('oauth.save', { kep: false });
   assert.equal((await client(env).call('kep.challenge')).error, 'value');
 });
+
+test('RSA с нестандартен експонент (напр. B-Trust, e = 38825): проверка без WebCrypto', async () => {
+  const { generateKeyPairSync, sign } = await import('node:crypto');
+  const { rsaVerify, verifySig } = await import('../worker/src/revocation.js');
+  for (const [bits, e, hash, alg] of [[2048, 38825, 'SHA-256', 'sha256'], [3072, 65537, 'SHA-384', 'sha384'], [2048, 3, 'SHA-1', 'sha1']]) {
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: bits, publicExponent: e });
+    const spki = new Uint8Array(publicKey.export({ format: 'der', type: 'spki' }));
+    const data = new TextEncoder().encode('ADM ЗДОИ4You ' + e);
+    const sig = new Uint8Array(sign(alg, data, privateKey));
+    assert.equal(await rsaVerify(spki, hash, sig, data), true, 'e=' + e);
+    const bad = sig.slice(); bad[10] ^= 1;
+    assert.equal(await rsaVerify(spki, hash, bad, data), false);
+    assert.equal(await rsaVerify(spki, hash, sig, new TextEncoder().encode('друго')), false);
+  }
+  // и през общата функция: CA с e = 38825 издава удостоверение, проверката по веригата минава
+  const caKeys = generateKeyPairSync('rsa', { modulusLength: 2048, publicExponent: 38825 });
+  const spki = new Uint8Array(caKeys.publicKey.export({ format: 'der', type: 'spki' }));
+  const data = new TextEncoder().encode('tbs');
+  assert.equal(await verifySig(spki, D.OID.sha256Rsa, new Uint8Array(sign('sha256', data, caKeys.privateKey)), data), true);
+});

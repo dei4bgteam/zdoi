@@ -46,9 +46,40 @@ export async function verifySig(spki, sigAlg, sig, data) {
       const key = await crypto.subtle.importKey('spki', spki, { name: 'ECDSA', namedCurve: curve }, false, ['verify']);
       return crypto.subtle.verify({ name: 'ECDSA', hash }, key, D.ecdsaRaw(sig, curve === 'P-384' ? 48 : 32), data);
     }
-    const key = await crypto.subtle.importKey('spki', spki, { name: 'RSASSA-PKCS1-v1_5', hash }, false, ['verify']);
+    let key;
+    try { key = await crypto.subtle.importKey('spki', spki, { name: 'RSASSA-PKCS1-v1_5', hash }, false, ['verify']); } catch (_) {
+      // WebCrypto в Cloudflare приема само експонент 3 или 65537; някои български CA (напр. B-Trust) ползват други
+      return rsaVerify(spki, hash, sig, data);
+    }
     return crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, sig, data);
   } catch (_) { return false; }
+}
+
+/* RSASSA-PKCS1-v1_5 (RFC 8017, 8.2.2) без WebCrypto: s^e mod n и сравнение с EMSA-PKCS1-v1_5 */
+const DIGEST_INFO = {
+  'SHA-1': '3021300906052b0e03021a05000414', 'SHA-256': '3031300d060960864801650304020105000420',
+  'SHA-384': '3041300d060960864801650304020205000430', 'SHA-512': '3051300d060960864801650304020305000440'
+};
+const big = u8 => (u8.length ? BigInt('0x' + D.hex(u8)) : 0n);
+function modPow(b, e, m) {
+  let r = 1n;
+  b %= m;
+  while (e > 0n) { if (e & 1n) r = r * b % m; e >>= 1n; b = b * b % m; }
+  return r;
+}
+export async function rsaVerify(spki, hash, sig, data) {
+  const key = D.read(D.read(spki).children[1].body.subarray(1));
+  const n = big(key.children[0].body), e = big(key.children[1].body);
+  let nBytes = key.children[0].body;
+  while (nBytes.length && nBytes[0] === 0) nBytes = nBytes.subarray(1);
+  const k = nBytes.length;
+  if (sig.length !== k || !DIGEST_INFO[hash]) return false;
+  const s = big(sig);
+  if (s >= n) return false;
+  const em = modPow(s, e, n).toString(16).padStart(k * 2, '0');
+  const t = DIGEST_INFO[hash] + D.hex(new Uint8Array(await crypto.subtle.digest(hash, data)));
+  const expected = '0001' + 'ff'.repeat(k - 3 - t.length / 2) + '00' + t;
+  return k - 3 - t.length / 2 >= 8 && em === expected;
 }
 const signedBy = (cert, issuer) => verifySig(issuer.spki, cert.sigAlg, cert.signature, cert.tbs);
 

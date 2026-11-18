@@ -68,15 +68,8 @@ export async function verifyPdf(pdf) {
   const certDer = sd.certs.find(c => { try { return eq(D.parseCert(c).serial, sd.sidSerial); } catch (_) { return false; } });
   if (!certDer) fail('value', 'Липсва сертификатът на подписващия.');
   const cert = D.parseCert(certDer);
-  let ok = false;
-  if (cert.keyAlg === D.OID.ec) {
-    const curve = cert.curve === D.OID.p384 ? 'P-384' : 'P-256', size = curve === 'P-384' ? 48 : 32;
-    const key = await crypto.subtle.importKey('spki', cert.spki, { name: 'ECDSA', namedCurve: curve }, false, ['verify']);
-    ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, D.ecdsaRaw(sd.signature, size), sd.attrsDer);
-  } else {
-    const key = await crypto.subtle.importKey('spki', cert.spki, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
-    ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, sd.signature, sd.attrsDer);
-  }
+  // общата проверка: и за RSA ключове с нестандартен експонент, които WebCrypto в Cloudflare не зарежда
+  const ok = await verifySig(cert.spki, cert.keyAlg === D.OID.ec ? D.OID.ecdsaSha256 : D.OID.sha256Rsa, sd.signature, sd.attrsDer);
   if (!ok) fail('value', 'Електронният подпис е невалиден.');
   const now = new Date();
   if (cert.notAfter && cert.notAfter < now) fail('value', 'Удостоверението на подписващия е изтекло.');
