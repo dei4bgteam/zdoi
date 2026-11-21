@@ -309,3 +309,18 @@ dialog { border-radius: 16px; box-shadow: var(--shadow-lg); padding: 22px 24px; 
   .timer { display: none; }
   .head h1 { font-size: 20px; }
 }
+
+/* лице: избор при отваряне и смяна от горната лента */
+.person-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.person-card { display: flex; align-items: flex-start; gap: 12px; text-align: left; padding: 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; }
+.person-card:hover, .person-card:focus-visible { border-color: var(--accent); box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+.person-card.off { opacity: .7; }
+.person-ico { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; background: var(--soft); color: var(--accent); flex: none; }
+.person-ico .ico { width: 22px; height: 22px; }
+.person-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.person-body small { color: var(--muted); font-size: 12.5px; }
+.person-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 260px; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--soft); color: var(--soft-ink); font-weight: 600; font-size: 13.5px; cursor: pointer; }
+.person-chip .person-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-panel > button.on { background: var(--soft); color: var(--soft-ink); font-weight: 600; }
+.reply-box { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
+@media (max-width: 640px) { .person-chip { max-width: 130px; } }

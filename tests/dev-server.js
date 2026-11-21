@@ -64,6 +64,10 @@ async function seed() {
   mailbox.inbox.push({ graphId: 'g1', messageId: '<dev1@x>', at: new Date().toISOString(), from: 'zdoi@sofia.example', fromName: 'Деловодство', to: ['priemna+p' + r1.regNo.slice(2) + '@zdoi.eu'], cc: [],
     subject: 'Вх. № СОА26-ГР94-1234 – регистрирано заявление', body: 'Уважаеми господин/госпожо, Вашето заявление е регистрирано с вх. № СОА26-ГР94-1234.', attachments: [] });
   mailbox.inbox.push({ graphId: 'g2', messageId: '<dev2@x>', at: new Date().toISOString(), from: 'someone@example.org', fromName: '', to: ['priemna@zdoi.eu'], cc: [], subject: 'Въпрос', body: 'Здравейте', attachments: [] });
+  // второ лице с отделна номерация – за избора на лице при отваряне
+  const { personsSave } = await import('../worker/src/persons.js');
+  await personsSave({ isNew: true, code: 'od', name: 'Фондация „Отворени данни“', outPrefix: 'ОД', regBasis: '', address: 'гр. Пловдив, ул. Главна 1', rep: 'Мария Иванова', repPosition: 'председател' }, ctx, app);
+  await reqCreate({ person: 'od', mode: 'Сдружението', title: 'Бюджет за култура 2026', owner: 'admin', entity: { name: 'Община Пловдив', email: 'zdoi@plovdiv.example' }, points: ['Разпределение на бюджета за култура за 2026 г.'] }, ctx, app);
   await pollMail(app, { manual: true });
   await courtSave({ regNo, court: 'Административен съд – София-град', caseNo: '4521', year: String(new Date().getFullYear()), kind: 'Жалба срещу мълчалив отказ', instance: 'Административен съд', status: 'Насрочено', nextHearing: day(-10) }, ctx, app);
 }

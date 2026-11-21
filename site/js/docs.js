@@ -197,7 +197,38 @@ export function letterDef(p) {
   return frame(p, content, 'Писмо');
 }
 
-export const DEFS = { 'Заявление': applicationDef, 'Уточнение': clarificationDef, 'Писмо': letterDef };
+/* ---------- уведомление за промяна на адреса за кореспонденция (чл. 25, ал. 1, т. 4 ЗДОИ) ---------- */
+
+export function addressChangeDef(p) {
+  const we = plural(p), r = p.ref || {};
+  const req = `${we ? 'наше' : 'мое'} заявление за ${/Повторно/.test(p.reqKind || '') ? 'повторно използване на информация' : 'достъп до обществена информация'}` +
+    (r.outNo ? ` изх. № ${r.outNo}` + (r.outDate ? ` от ${fmtDate(r.outDate)} г.` : '') : '') +
+    (r.entityRegNo ? `, вх. № ${r.entityRegNo}` + (r.entityRegDate ? ` от ${fmtDate(r.entityRegDate)} г.` : '') : '') +
+    (p.title ? ` (относно: ${p.title})` : '');
+  const from = p.effectiveDate ? `считано от ${fmtDate(p.effectiveDate)} г. ` : '';
+  const rows = [
+    ['Имейл за кореспонденция', p.newReplyTo || p.replyTo || ''],
+    p.newAddress ? ['Адрес за кореспонденция', p.newAddress] : null,
+    p.oldReplyTo ? ['Досегашен имейл', p.oldReplyTo] : null
+  ].filter(Boolean);
+  const content = [
+    ...letterhead(p.org), outLine(p), addressee(p.entity || {}),
+    ...title('УВЕДОМЛЕНИЕ', 'за промяна на адреса за кореспонденция'),
+    fromBlock(p),
+    P(p.salutation || 'Уважаеми господин/госпожо,', { margin: [0, 6, 0, 6] }),
+    P(`Във връзка с ${req} ${we ? 'Ви уведомяваме' : 'Ви уведомявам'}, че ${from}адресът за кореспонденция по преписката (чл. 25, ал. 1, т. 4 ЗДОИ) се променя, както следва:`),
+    { table: { widths: [150, '*'], body: rows.map(([k, v]) => [{ text: k, color: GRAY }, { text: v, bold: k !== 'Досегашен имейл' }]) }, layout: 'lightHorizontalLines', margin: [0, 2, 0, 10] },
+    P(`${we ? 'Молим' : 'Моля'} всички отговори, решения, уведомления и искания по заявлението занапред да бъдат изпращани на новия адрес.` +
+      (p.oldReplyTo ? ` Кореспонденцията, изпратена на досегашния имейл, също ще бъде получена, но ${we ? 'молим' : 'моля'} да не се използва.` : '')),
+    P(`При отговор ${we ? 'молим' : 'моля'} да посочвате изх. № на заявлението${r.outNo ? ' (' + r.outNo + ')' : ''} и номера на настоящото уведомление.`, { fontSize: 9.5, color: GRAY }),
+    ...paras(p.extra).map(t => P(t)),
+    ...attachmentsList(p),
+    signature(p)
+  ].filter(Boolean);
+  return frame(p, content, 'Уведомление');
+}
+
+export const DEFS = { 'Заявление': applicationDef, 'Уточнение': clarificationDef, 'Писмо': letterDef, 'Промяна на адрес': addressChangeDef };
 
 /* ---------- досие на преписка (за съда и при връчвания) ---------- */
 

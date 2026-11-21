@@ -71,6 +71,14 @@ export const boxOf = (app, p) => String((p && p.mailbox) || mailboxAddress(app.e
 /* Сдружението: П-2026-0001 и ЗДОИ-2026-0001; другите: П-<КОД>-2026-0001 и <префикс>-2026-0001 */
 export const regNoFor = (p, y, n) => 'П-' + (p.isDefault ? '' : p.code.toUpperCase() + '-') + y + '-' + String(n).padStart(4, '0');
 export const outNoFor = (p, y, n) => (p.outPrefix || 'ЗДОИ') + '-' + y + '-' + String(n).padStart(4, '0');
+/*
+ * Етикет в адреса за отговор: кодът на лицето + годината и номера на преписката (zdoi-2026-0001, abc-2026-0001),
+ * за да не се смесват отговорите, когато няколко лица използват една и съща кутия.
+ */
+export const tagFor = (p, regNo) => {
+  const m = /(\d{4})-(\d{4})$/.exec(String(regNo));
+  return (p.code || DEFAULT_CODE) + '-' + (m ? m[1] + '-' + m[2] : String(regNo).replace(/^П-/, '').toLowerCase());
+};
 
 /* ---------- достъп ---------- */
 

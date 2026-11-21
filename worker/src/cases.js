@@ -265,7 +265,7 @@ export async function dashboard(d, ctx, app) {
   const open = cases.filter(c => CASE_OPEN.includes(c.status));
   const hearings = (await app.store.list('courts')).filter(x => x.nextHearing && x.nextHearing >= today && daysBetween(today, x.nextHearing) <= 30)
     .filter(x => !x.regNo || cases.some(c => c.regNo === x.regNo)).map(courtView).sort((a, b) => a.nextHearing.localeCompare(b.nextHearing));
-  return Object.assign(await reqDashboard(app, ctx), {
+  return Object.assign(await reqDashboard(app, ctx, line(d.person, 10)), {
     byStatus, total: cases.length, open: open.length,
     overdue: open.filter(c => c.daysLeft !== null && c.daysLeft < 0).map(brief),
     soon: open.filter(c => c.daysLeft !== null && c.daysLeft >= 0 && c.daysLeft <= 3).map(brief).sort((a, b) => a.daysLeft - b.daysLeft),

@@ -53,7 +53,7 @@ test('лица: суперадминистраторът добавя лице �
   assert.equal(d.outNo, 'АБВ-' + Y + '-0001');
   await ivan.call('doc.file', { outNo: d.outNo, pdf: PDF });
   const s = await ivan.call('mail.send', { regNo: c.regNo, to: 'obshtina@example.org', subject: '[' + c.regNo + '] Заявление', text: 'Приложено', docs: [d.outNo] });
-  assert.equal(s.replyTo, 'abc+pabc-' + Y + '-0001@zdoi.eu');
+  assert.equal(s.replyTo, 'abc+abc-' + Y + '-0001@zdoi.eu');
   assert.equal(boxes['abc@zdoi.eu'].sent.length, 1);
   assert.equal(boxes['priemna@zdoi.eu'].sent.length, 0);
 
@@ -124,4 +124,31 @@ test('сесия: избор от 30 минути до 3 часа, по подр
   assert.ok(s.session - Date.now() > 179 * 60000);
   assert.equal((await admin.call('me')).me.sessionMin, 180);
   assert.equal((await admin.call('bootstrap')).sessionMin, 180);
+});
+
+test('адрес за отговор: с кода на лицето; смяна на стария адрес и разпознаване и по двата', async () => {
+  const { env, admin, boxes } = await world();
+  const c = await admin.call('req.create', reqData());
+  const g = await admin.call('req.get', { regNo: c.regNo });
+  assert.equal(g.replyTo, 'priemna+zdoi-' + Y + '-0001@zdoi.eu');
+  // преписка със стар етикет (p2026-0001) получава нов адрес
+  const rec = (await env.__store.list('requests', { regNo: c.regNo }))[0];
+  await env.__store.patch('requests', rec._id, { tag: 'p' + Y + '-0001' });
+  const t = await admin.call('req.retag', { regNo: c.regNo });
+  assert.equal(t.oldReplyTo, 'priemna+p' + Y + '-0001@zdoi.eu');
+  assert.equal(t.replyTo, 'priemna+zdoi-' + Y + '-0001@zdoi.eu');
+  assert.equal((await admin.call('req.retag', { regNo: c.regNo })).changed, false);
+  // уведомлението за промяната е документ с Изх. №
+  assert.equal((await admin.call('doc.reserve', { regNo: c.regNo, kind: 'Промяна на адрес', payload: { oldReplyTo: t.oldReplyTo, newReplyTo: t.replyTo } })).outNo, 'ЗДОИ-' + Y + '-0001');
+  const at = new Date(Date.now() - 60000).toISOString().slice(0, 19) + 'Z';
+  const base = { cc: [], body: 'Отговор', fromName: '', attachments: [], at, from: 'obshtina@example.org', subject: 'Re' };
+  boxes['priemna@zdoi.eu'].inbox.push(Object.assign({}, base, { graphId: 'o1', messageId: '<o1@x>', to: [t.oldReplyTo] }), Object.assign({}, base, { graphId: 'n1', messageId: '<n1@x>', to: [t.replyTo] }));
+  const run = await pollMail(makeApp(env, env.__store, env.__kv, null), { manual: true });
+  assert.equal(run.matched, 2);
+  // табло и списък само за избраното лице
+  await admin.call('req.create', reqData({ person: 'abc' }));
+  assert.equal((await admin.call('req.list', { person: 'abc' })).requests.length, 1);
+  assert.equal((await admin.call('req.list', { person: 'zdoi' })).requests.length, 1);
+  assert.equal((await admin.call('dashboard', { person: 'abc' })).reqTotal, 1);
+  assert.equal((await admin.call('dashboard', {})).reqTotal, 2);
 });

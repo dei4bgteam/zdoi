@@ -12,7 +12,7 @@ import { SCHEMA } from './schema.js';
 import { notifyOf } from './auth.js';
 import { usersBrief } from './users.js';
 import { getMailbox, plusOf, mailboxAddress, fromB64 } from './mailbox.js';
-import { REG_BASIS, allPersons, personOf, codeOf, orgProfile, boxOf, regNoFor, outNoFor, allowedCodes, saveDefaultProfile } from './persons.js';
+import { REG_BASIS, allPersons, personOf, codeOf, orgProfile, boxOf, regNoFor, outNoFor, tagFor, allowedCodes, saveDefaultProfile } from './persons.js';
 
 export { REG_BASIS, orgProfile };
 
@@ -32,7 +32,7 @@ export const SENT_HOW = ['', 'Имейл', 'Платформа за достъп
 export const CHANNELS = ['Сигурно електронно връчване', 'Поща', 'На място', 'Платформа за достъп (чл. 15в)', 'Куриер', 'Имейл'];
 export const POST_KINDS = ['Препоръчано с обратна разписка', 'Препоръчано', 'Обикновено', 'С известие за доставяне (куриер)'];
 const PROOF_TYPES = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png' };
-export const DOC_KINDS = ['Заявление', 'Уточнение', 'Писмо'];
+export const DOC_KINDS = ['Заявление', 'Уточнение', 'Писмо', 'Промяна на адрес'];
 const APPEALABLE = ['Частичен достъп', 'Отказ', 'Без разглеждане', 'Препратено (чл. 32)', 'Няма информация (чл. 33)'];
 
 /* П-2026-0001 → p2026-0001, П-ABC-2026-0001 → pabc-2026-0001 (частта след „+“ в адреса трябва да е на латиница) */
@@ -118,8 +118,8 @@ function reqFields(d, person) {
 /* ---------- преписки ---------- */
 
 export async function reqList(d, ctx, app) {
-  const today = todayIso(), see = await reqScope(app, ctx);
-  const rows = (await app.store.list('requests')).filter(see).map(r => {
+  const today = todayIso(), see = await reqScope(app, ctx), only = line(d.person, 10);
+  const rows = (await app.store.list('requests')).filter(r => see(r) && (!only || codeOf(r) === only)).map(r => {
     const o = withReqDue(r, today);
     o.person = codeOf(r);
     delete o.motives; delete o.appealNote; delete o.notes;
@@ -154,6 +154,13 @@ async function myBoxes(app, ctx) {
   const codes = await allowedCodes(app, ctx);
   return [...new Set((await allPersons(app)).filter(p => codes.includes(p.code)).map(p => boxOf(app, p)))];
 }
+/* само кутията на избраното лице (ако е посочено и има достъп до него) */
+async function personBoxes(app, ctx, code) {
+  const mine = await myBoxes(app, ctx);
+  if (!code) return mine;
+  const p = (await allPersons(app)).find(x => x.code === code);
+  return p ? mine.filter(b => b === boxOf(app, p)) : mine;
+}
 const mailView = m => Object.assign(view(m), { attachments: safeJson(m.attachments || '[]'), to: m.to, graphId: undefined });
 
 async function checkOwner(app, owner) {
@@ -179,7 +186,7 @@ export async function reqCreate(d, ctx, app) {
   const y = todayIso().slice(0, 4);
   const rec = await insertUnique(app, 'requests', {}, 'regNo', n => regNoFor(person, y, n),
     Object.assign({ createdAt: stamp(), createdBy: ctx.username, updatedAt: stamp(), status: 'Чернова' }, v));
-  await app.store.patch('requests', rec._id, { tag: tagOf(rec.regNo) });
+  await app.store.patch('requests', rec._id, { tag: tagFor(person, rec.regNo) });
   await event(app, rec.regNo, ctx.username, 'Създаване', 'Преписката е създадена.');
   await audit(app, ctx.username, 'Ново заявление (чернова)', rec.regNo, v.entityName);
   return { regNo: rec.regNo };
@@ -212,6 +219,25 @@ export async function reqUpdate(d, ctx, app) {
   await event(app, r.regNo, ctx.username, 'Промяна', changed.map(k => labels[k][0] + (json.includes(k) ? '' : ': ' + (v[k] || '—'))).join('; '));
   if (patch.status) await notifyOwner(app, ctx, r, 'Нов статус: ' + patch.status);
   return { regNo: r.regNo };
+}
+
+/*
+ * Нов адрес за отговор: етикетът става във формата с кода на лицето (или се взема кутията на лицето, ако е сменена).
+ * Писмата до стария адрес продължават да се разпознават; субектът се уведомява с документ „Промяна на адрес“.
+ */
+export async function reqRetag(d, ctx, app) {
+  const r = await findReq(app, d.regNo, ctx);
+  unlocked(r);
+  const person = await personOf(app, codeOf(r)), box = boxOf(app, person);
+  const oldTag = r.tag || tagOf(r.regNo), newTag = tagFor(person, r.regNo);
+  // предишната кутия: от последното изпратено писмо по преписката (ако кутията на лицето е сменена)
+  const sent = (await app.store.list('mail', { regNo: r.regNo })).filter(m => m.box && m.direction === 'Изходяща').sort(byDesc('at'))[0];
+  const oldReplyTo = plusOf(sent ? sent.box : box, oldTag), replyTo = plusOf(box, newTag);
+  if (oldReplyTo === replyTo) return { replyTo, oldReplyTo, changed: false };
+  await app.store.patch('requests', r._id, { tag: newTag, updatedAt: stamp() });
+  await event(app, r.regNo, ctx.username, 'Адрес за отговор', 'Нов адрес за отговор: ' + replyTo + ' (предишен: ' + oldReplyTo + ' – писмата до него също се разпознават).');
+  await audit(app, ctx.username, 'Нов адрес за отговор', r.regNo, replyTo);
+  return { replyTo, oldReplyTo, changed: true };
 }
 
 export async function reqAssign(d, ctx, app) {
@@ -438,7 +464,7 @@ export async function mailRecord(d, ctx, app) {
 
 export async function mailInbox(d, ctx, app) {
   if (!ctx.perms.casesAll) fail('role', 'Неразпределената поща се вижда от потребители с право „всички преписки“.');
-  const boxes = await myBoxes(app, ctx);
+  const boxes = await personBoxes(app, ctx, line(d.person, 10));
   return { mail: (await unassigned(app, boxes)).map(mailView).sort(byDesc('at')), boxes };
 }
 
@@ -486,7 +512,7 @@ export async function matchRequest(app, msg, requests, box) {
   const plus = new RegExp('^' + local + '\\+([a-z0-9-]+)@', 'i');
   for (const a of [...msg.to, ...msg.cc]) {
     const m = plus.exec(a);
-    if (m) { const r = requests.find(x => (x.tag || tagOf(x.regNo)) === m[1].toLowerCase()); if (r) return [r, 'етикет +' + m[1]]; }
+    if (m) { const t = m[1].toLowerCase(), r = requests.find(x => x.tag === t || tagOf(x.regNo) === t); if (r) return [r, 'етикет +' + m[1]]; }
   }
   let m = /П-(?:([A-Z][A-Z0-9]{1,9})-)?(\d{4})-(\d{4})/.exec(msg.subject);
   if (m) { const no = 'П-' + (m[1] ? m[1] + '-' : '') + m[2] + '-' + m[3]; const r = requests.find(x => x.regNo === no); if (r) return [r, 'номер в темата']; }
@@ -575,10 +601,10 @@ export async function systemGet(d, ctx, app) {
   const next = p => { let n = 1; while (used.has(outNoFor(p, y, n))) n++; return outNoFor(p, y, n); };
   const persons = await allPersons(app), def = persons.find(p => p.isDefault);
   return {
-    org: await orgProfile(app), mailbox: mailboxAddress(app.env), sampleReplyTo: plusOf(mailboxAddress(app.env), 'p' + y + '-0001'),
+    org: await orgProfile(app), mailbox: mailboxAddress(app.env), sampleReplyTo: plusOf(boxOf(app, def), tagFor(def, 'П-' + y + '-0001')),
     mailPoll: (await setting(app, 'mailPoll', 'Да')) === 'Да', mailWatermark: await setting(app, 'mailWatermark', ''),
     mailLastRun: safeJson(await setting(app, 'mailLastRun', '{}')), nextOutNo: next(def),
-    registers: persons.map(p => ({ code: p.code, name: p.name, active: p.active, box: boxOf(app, p), nextOutNo: next(p), regNo: regNoFor(p, y, 1).replace(/0001$/, 'NNNN') })),
+    registers: persons.map(p => ({ code: p.code, name: p.name, active: p.active, box: boxOf(app, p), nextOutNo: next(p), regNo: regNoFor(p, y, 1).replace(/0001$/, 'NNNN'), replyTo: plusOf(boxOf(app, p), tagFor(p, regNoFor(p, y, 1))) })),
     unassigned: (await unassigned(app)).length,
     lastReminder: await app.kv.get('remind:' + todayIso()) ? 'днес' : 'не днес'
   };
@@ -601,16 +627,16 @@ export async function systemPoll(d, ctx, app) {
 
 /* ---------- табло ---------- */
 
-export async function reqDashboard(app, ctx) {
+export async function reqDashboard(app, ctx, only) {
   const today = todayIso(), see = await reqScope(app, ctx);
-  const rows = (await app.store.list('requests')).filter(see).map(r => withReqDue(r, today));
+  const rows = (await app.store.list('requests')).filter(r => see(r) && (!only || codeOf(r) === only)).map(r => withReqDue(r, today));
   const brief = r => ({ regNo: r.regNo, entityName: r.entityName, status: r.status, due: r.due, dueLabel: r.dueLabel, daysLeft: r.daysLeft, ours: r.ours, silentBy: r.silentBy, silentDays: r.silentDays, appealBy: r.appealBy, appealDays: r.appealDays });
   return {
     reqTotal: rows.length, reqDrafts: rows.filter(r => r.status === 'Чернова').length,
     reqWaiting: rows.filter(r => r.due).map(brief).sort((a, b) => a.due.localeCompare(b.due)),
     reqSilent: rows.filter(r => r.due && !r.ours && r.daysLeft < 0 && r.silentDays >= 0).map(brief),
     reqAppeals: rows.filter(r => r.appealDays !== null && r.appealDays >= 0).map(brief),
-    unassignedMail: ctx.perms.casesAll ? (await unassigned(app, await myBoxes(app, ctx))).length : 0
+    unassignedMail: ctx.perms.casesAll ? (await unassigned(app, await personBoxes(app, ctx, only))).length : 0
   };
 }
 

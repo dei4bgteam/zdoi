@@ -68,6 +68,25 @@ const isSuper = () => !!me && me.role === 'Суперадминистратор'
 const personsAll = () => (boot && boot.persons) || [];
 const personName = code => { const p = personsAll().find(x => x.code === code); return p ? p.name : code || '—'; };
 const manyPersons = () => personsAll().length > 1;
+let curCode = null;
+const curKey = () => 'person:' + (me ? me.username : '');
+const curPerson = () => personsAll().find(p => p.code === curCode) || null;
+const isDefaultCur = () => { const p = curPerson(); return !p || !!p.isDefault; };
+function setCur(code) {
+  curCode = code;
+  try { sessionStorage.setItem(curKey(), code); } catch (_) { /* без памет */ }
+  searchCache = null; countsAt = 0;
+}
+/* при отваряне: запомненото за раздела или единственото лице; иначе – избор */
+function ensureCur() {
+  if (curCode && curPerson()) return true;
+  let saved = null;
+  try { saved = sessionStorage.getItem(curKey()); } catch (_) { /* без памет */ }
+  if (saved && personsAll().some(p => p.code === saved)) { curCode = saved; return true; }
+  if (personsAll().length === 1) { curCode = personsAll()[0].code; return true; }
+  if (!personsAll().length) return true;
+  return false;
+}
 
 /* ---------- сървър ---------- */
 
@@ -105,7 +124,7 @@ function strongEnough(pw) {
 }
 
 function endSession(msg) {
-  me = null; boot = null; clearInterval(timerId);
+  me = null; boot = null; curCode = null; clearInterval(timerId);
   location.hash = '#/login';
   route();
   if (msg) toast(msg);
@@ -243,8 +262,8 @@ const NAV = () => [
     ['#/dashboard', 'Табло', 'home', true],
     ['#/requests', 'Заявления', 'send', true, 'requests'],
     ['#/register', 'Изходящ регистър', 'book', true],
-    ['#/mail', 'Поща за разпределяне', 'mail', !!me.perms.casesAll, 'mail'],
-    ['#/cases', 'Входящ регистър', 'inbox', true, 'cases'],
+    ['#/mail', 'Поща', 'mail', !!me.perms.casesAll, 'mail'],
+    ['#/cases', 'Входящ регистър', 'inbox', isDefaultCur(), 'cases'],
     ['#/courts', 'Съдебни дела', 'scale', true]
   ]],
   ['Справочници', [
@@ -314,6 +333,7 @@ function shell() {
 
   const top = h('header', { class: 'topbar' },
     h('button', { class: 'icon-btn menu-btn', 'aria-label': 'Меню', onclick: () => document.body.classList.toggle('nav-open') }, icon('menu')),
+    personSwitch(),
     searchBox(),
     h('div', { class: 'top-right' },
       newMenu,
@@ -338,7 +358,7 @@ async function refreshCounts(force) {
   if (!me || (!force && Date.now() - countsAt < 120000)) return;
   countsAt = Date.now();
   try {
-    const d = await api('dashboard');
+    const d = await api('dashboard', { person: curCode || '' });
     const set = (key, n, cls) => document.querySelectorAll('[data-count="' + key + '"]').forEach(el => { el.textContent = n > 99 ? '99+' : String(n); el.hidden = !n; el.className = 'nav-count ' + (cls || ''); });
     set('requests', d.reqSilent.length, 'bad');
     set('mail', d.unassignedMail, 'warn');
@@ -351,7 +371,7 @@ async function refreshCounts(force) {
 let searchCache = null;
 async function searchData() {
   if (searchCache && Date.now() - searchCache.at < 60000) return searchCache;
-  const [r, c] = await Promise.all([api('req.list').catch(() => ({ requests: [] })), api('case.list').catch(() => ({ cases: [] }))]);
+  const [r, c] = await Promise.all([api('req.list', { person: curCode || '' }).catch(() => ({ requests: [] })), isDefaultCur() ? api('case.list').catch(() => ({ cases: [] })) : { cases: [] }]);
   searchCache = { at: Date.now(), requests: r.requests || [], cases: c.cases || [] };
   return searchCache;
 }
@@ -501,7 +521,8 @@ async function activateView(username, token) {
 async function dashboardView() {
   loading();
   try {
-    const d = await api('dashboard');
+    const d = await api('dashboard', { person: curCode || '' });
+    const cp = curPerson(), own = isDefaultCur();
     const tile = (n, label, href, cls) => h('a', { class: 'card tile ' + (cls || ''), href }, h('b', null, n), h('span', { class: 'muted' }, label));
     const reqRows = (list, empty) => list.length ? h('ul', { class: 'list-plain' }, list.map(r => h('li', null,
       h('a', { href: '#/request/' + encodeURIComponent(r.regNo) }, r.regNo + ' – ' + r.entityName),
@@ -511,7 +532,8 @@ async function dashboardView() {
       withDue ? h('span', { class: dueClass(c.daysLeft) }, c.due ? fmtDate(c.due) + ' · ' + dueText(c.daysLeft) : '—')
         : h('span', { class: dueClass(c.appealDays) }, fmtDate(c.appealBy) + ' · ' + dueText(c.appealDays))))) : h('p', { class: 'empty' }, empty);
     setView(
-      head('Табло', me.perms.casesEdit ? h('a', { class: 'btn primary', href: '#/request/new' }, 'Ново заявление') : null, me.perms.casesEdit ? h('a', { class: 'btn', href: '#/case/new' }, 'Входящо заявление') : null),
+      head('Табло', me.perms.casesEdit ? h('a', { class: 'btn primary', href: '#/request/new' }, 'Ново заявление') : null, me.perms.casesEdit && own ? h('a', { class: 'btn', href: '#/case/new' }, 'Входящо заявление') : null),
+      manyPersons() && cp ? h('p', { class: 'small muted mb-12' }, 'Данни за ', h('b', null, cp.name), ' · номера ' + (cp.isDefault ? 'П-ГГГГ-NNNN' : 'П-' + cp.code.toUpperCase() + '-ГГГГ-NNNN') + ', Изх. № ' + cp.outPrefix + '-ГГГГ-NNNN') : null,
       h('h2', { class: 'mb-12' }, 'Заявления до институции'),
       h('div', { class: 'tiles' },
         tile(d.reqWaiting.length, 'Чакат отговор или уточнение', '#/requests'),
@@ -524,15 +546,15 @@ async function dashboardView() {
         h('section', { class: 'card stack' }, h('h2', null, 'За обжалване'), d.reqSilent.length || d.reqAppeals.length ? h('ul', { class: 'list-plain' },
           d.reqSilent.map(r => h('li', null, h('a', { href: '#/request/' + encodeURIComponent(r.regNo) }, r.regNo + ' – ' + r.entityName), h('span', { class: dueClass(r.silentDays) }, 'мълчалив отказ до ' + fmtDate(r.silentBy)))),
           d.reqAppeals.map(r => h('li', null, h('a', { href: '#/request/' + encodeURIComponent(r.regNo) }, r.regNo + ' – ' + r.entityName), h('span', { class: dueClass(r.appealDays) }, 'решение до ' + fmtDate(r.appealBy))))) : h('p', { class: 'empty' }, 'Няма срокове за обжалване.'))),
-      h('h2', { class: 'mb-12' }, 'Входящ регистър'),
-      h('div', { class: 'tiles' },
+      own ? h('h2', { class: 'mb-12' }, 'Входящ регистър') : null,
+      own ? h('div', { class: 'tiles' },
         tile(d.open, 'Отворени преписки', '#/cases'),
         tile(d.overdue.length, 'С изтекъл срок', '#/cases?f=overdue', d.overdue.length ? 'bad' : ''),
         tile(d.soon.length, 'Изтичат до 3 дни', '#/cases?f=soon', d.soon.length ? 'warn' : ''),
         tile(d.mine.length, 'Възложени на мен', '#/cases?f=mine'),
         tile(d.unassigned.length, 'Без отговорник', '#/cases?f=none'),
-        tile(d.total, 'Всички преписки', '#/cases')),
-      h('div', { class: 'grid2' },
+        tile(d.total, 'Всички преписки', '#/cases')) : null,
+      own ? h('div', { class: 'grid2' },
         h('section', { class: 'card stack' }, h('h2', null, 'Изтекли срокове'), caseRows(d.overdue, 'Няма преписки с изтекъл срок.')),
         h('section', { class: 'card stack' }, h('h2', null, 'Изтичат скоро'), caseRows(d.soon, 'Няма срокове в следващите 3 дни.')),
         h('section', { class: 'card stack' }, h('h2', null, 'Моите преписки'), caseRows(d.mine, 'Нямате възложени преписки.')),
@@ -540,7 +562,7 @@ async function dashboardView() {
         h('section', { class: 'card stack' }, h('h2', null, 'Заседания (30 дни)'), d.hearings.length ? h('ul', { class: 'list-plain' }, d.hearings.map(x => h('li', null,
           h('a', { href: x.regNo ? '#/case/' + encodeURIComponent(x.regNo) : '#/courts' }, x.court.replace('Административен съд – ', 'АС ') + ' № ' + x.caseNo + '/' + x.year),
           h('span', null, fmtDate(x.nextHearing))))) : h('p', { class: 'empty' }, 'Няма насрочени заседания.')),
-        h('section', { class: 'card stack' }, h('h2', null, 'По статус'), h('ul', { class: 'list-plain' }, Object.entries(d.byStatus).map(([s, n]) => h('li', null, statusPill(s), h('b', null, n)))))));
+        h('section', { class: 'card stack' }, h('h2', null, 'По статус'), h('ul', { class: 'list-plain' }, Object.entries(d.byStatus).map(([s, n]) => h('li', null, statusPill(s), h('b', null, n)))))) : null);
   } catch (e) { failView(e); }
 }
 
@@ -1102,11 +1124,11 @@ function pointsEditor(points, label) {
 async function requestsView(query) {
   loading();
   try {
-    const { requests } = await api('req.list');
+    const { requests } = await api('req.list', { person: curCode || '' });
     const preset = new URLSearchParams(query || '').get('f') || '';
     const q = h('input', { type: 'search', placeholder: 'Търсене: номер, субект, заявител, предмет…', 'aria-label': 'Търсене' });
     const st = h('select', { 'aria-label': 'Статус' }, h('option', { value: '' }, 'Всички статуси'), boot.lists.reqStatuses.map(s => h('option', { value: s }, s)));
-    const per = h('select', { 'aria-label': 'Лице', hidden: !manyPersons() }, h('option', { value: '' }, 'Всички лица'), personsAll().map(p => h('option', { value: p.code }, p.name)));
+    const per = h('select', { 'aria-label': 'Лице', hidden: true }, h('option', { value: '' }, 'Всички лица'), personsAll().map(p => h('option', { value: p.code }, p.name)));
     const due = h('select', { 'aria-label': 'Срок' }, h('option', { value: '' }, 'Всички'), h('option', { value: 'overdue' }, 'Без отговор в срок'), h('option', { value: 'ours' }, 'Чака наше уточнение'), h('option', { value: 'mine' }, 'Моите'));
     if (preset === 'draft') st.value = 'Чернова';
     if (preset === 'overdue') due.value = 'overdue';
@@ -1164,13 +1186,15 @@ async function requestEditView(regNo) {
     addressees = (await api('addressee.list')).addressees;
   } catch (e) { return failView(e); }
   const v = r ? Object.assign({ mode: r.mode, kind: r.kind, title: r.title, motives: r.motives, noPublish: r.noPublish, person: r.person }, prefixed(r.applicant, 'a_'), prefixed(r.entity, 'e_'))
-    : { mode: 'Сдружението', kind: boot.lists.reqKinds[0], e_regBasis: boot.lists.regBasis[2], person: (personsAll().find(p => p.active) || {}).code };
+    : { mode: 'Сдружението', kind: boot.lists.reqKinds[0], e_regBasis: boot.lists.regBasis[2], person: curCode || (personsAll().find(p => p.active) || {}).code };
   // лицето определя бланката, номерацията и пощенската кутия, затова се избира само при създаване
   const usable = personsAll().filter(p => p.active || p.code === v.person);
-  const personSel = !r && usable.length > 1 ? field({ k: 'person', label: 'Лице (бланка, регистър и поща)', type: 'select', options: usable.map(p => [p.code, p.name]), req: true }, v.person) : null;
+  // лицето е избраното при отваряне (смяна – от горната лента)
+  const personSel = !r && manyPersons() ? h('div', { class: 'field full' }, h('span', null, 'Лице (бланка, регистър и поща)'), h('div', { class: 'note' }, (curPerson() || {}).name || '—', h('span', { class: 'small' }, ' · смяна от горната лента'))) : null;
+  if (!r && curPerson() && !curPerson().active) return setView(h('p', { class: 'err' }, 'Лицето „' + curPerson().name + '“ е спряно – не се създават нови заявления от негово име.'));
   let form = null;
-  const curPerson = () => personsAll().find(p => p.code === ((form && form.elements.person && form.elements.person.value) || v.person)) || personsAll()[0] || { name: 'Сдружението' };
-  const modeOpts = () => { const p = curPerson(), n = p.brand || p.name; return [['Сдружението', p.isDefault ? 'Сдружението (' + n + ')' : n], ['Клиент', 'Клиент – ' + n + ' е пълномощник']]; };
+  const selPerson = () => personsAll().find(p => p.code === ((form && form.elements.person && form.elements.person.value) || v.person)) || personsAll()[0] || { name: 'Сдружението' };
+  const modeOpts = () => { const p = selPerson(), n = p.brand || p.name; return [['Сдружението', p.isDefault ? 'Сдружението (' + n + ')' : n], ['Клиент', 'Клиент – ' + n + ' е пълномощник']]; };
   const modeSel = field({ k: 'mode', label: 'Заявлението е от името на', type: 'select', options: modeOpts(), req: true }, v.mode);
   const applicantBox = h('fieldset', null, h('legend', null, 'Заявител (клиент)'), h('div', { class: 'form-grid' }, PARTY_FIELDS('a_', { type: true, rep: true, req: true, nameLabel: 'Имена или наименование' }).map(f => field(f, v[f.k]))),
     h('p', { class: 'small muted mt-8' }, 'Приложете пълномощно към заявлението (в документа – „Приложения“).'));
@@ -1261,7 +1285,10 @@ async function requestView(regNo) {
       : h('p', { class: 'muted' }, r.status === 'Чернова' ? 'Сроковете започват след изпращането.' : 'Няма текущ срок.'),
     r.silentBy && r.daysLeft !== null && r.daysLeft < 0 ? h('div', null, h('div', { class: 'small muted' }, 'Обжалване на мълчалив отказ (едномесечен срок, чл. 149, ал. 2 АПК)'), h('b', { class: dueClass(r.silentDays) }, fmtDate(r.silentBy) + ' · ' + dueText(r.silentDays))) : null,
     r.appealBy ? h('div', null, h('div', { class: 'small muted' }, 'Обжалване на решението (14 дни, чл. 149, ал. 1 АПК)'), h('b', { class: dueClass(r.appealDays) }, fmtDate(r.appealBy) + ' · ' + dueText(r.appealDays))) : null,
-    h('p', { class: 'small muted' }, 'Отговори на: ', h('b', null, d.replyTo)));
+    h('div', { class: 'reply-box' }, h('div', { class: 'small muted' }, 'Адрес за отговор'), h('b', { class: 'wrap-any' }, d.replyTo),
+      edit ? h('div', { class: 'actions mt-8' },
+        h('button', { class: 'btn sm', title: 'Копирай адреса', onclick: async () => { try { await navigator.clipboard.writeText(d.replyTo); toast('Копирано.'); } catch (_) { toast('Копирането не е разрешено.'); } } }, 'Копирай'),
+        h('button', { class: 'btn sm', title: 'Адрес с кода на лицето и уведомление до субекта (PDF)', onclick: () => changeReplyTo(d) }, 'Смени адреса…')) : null));
 
   const ownerSel = h('select', { disabled: !edit, 'aria-label': 'Отговорник' }, h('option', { value: '' }, '— без отговорник —'), boot.users.filter(u => u.role !== 'Наблюдател').map(u => h('option', { value: u.username }, u.name)));
   ownerSel.value = r.owner || '';
@@ -1343,20 +1370,48 @@ async function requestView(regNo) {
       h('div', { class: 'stack' }, dueCard, ownerCard, lockCard, courtCard)));
 }
 
-/* ---------- документ: заявление, уточнение, писмо ---------- */
+/* нов адрес за отговор: етикетът с кода на лицето; после уведомление до субекта (документ с Изх. №) */
+function changeReplyTo(d) {
+  const r = d.request;
+  const target = d.mailbox.replace('@', '+' + (d.person ? d.person.code : 'zdoi') + '-' + r.regNo.slice(-9) + '@');
+  const already = target === d.replyTo;
+  const body = h('div', { class: 'stack' },
+    already ? h('p', null, 'Адресът за отговор вече е с кода на лицето: ', h('b', { class: 'mono' }, d.replyTo), '. Можете да подготвите уведомление до субекта (напр. ако преди е получил друг адрес).')
+      : [h('p', null, 'Адресът за отговор по преписката става с кода на лицето, за да не се смесват отговорите по преписки на различни лица:'),
+        h('p', { class: 'mono' }, d.replyTo, ' → ', h('b', null, target)),
+        h('p', { class: 'small muted' }, 'Писмата до стария адрес продължават да се разпознават. След смяната се отваря уведомлението до субекта („Промяна на адрес“) – запишете го и го изпратете.')],
+    h('div', { class: 'actions' },
+      h('button', { type: 'button', class: 'btn', onclick: () => dlg.close() }, 'Отказ'),
+      h('button', { type: 'button', class: 'btn' + (already ? ' primary' : ''), onclick: () => { dlg.close(); docEditor(d, 'Промяна на адрес', null, { oldReplyTo: '' }); } }, already ? 'Подготви уведомление' : 'Само уведомление'),
+      already ? null : h('button', { type: 'button', class: 'btn primary', onclick: async e => {
+        e.target.disabled = true;
+        try {
+          const t = await api('req.retag', { regNo: r.regNo });
+          dlg.close();
+          if (!t.changed) toast('Адресът вече е с кода на лицето.');
+          const fresh = await api('req.get', { regNo: r.regNo });
+          docEditor(fresh, 'Промяна на адрес', null, { oldReplyTo: t.changed ? t.oldReplyTo : '', newReplyTo: t.replyTo });
+        } catch (ex) { toast(ex.message); e.target.disabled = false; }
+      } }, 'Смени и подготви уведомление')));
+  const dlg = dialog('Адрес за отговор – ' + r.regNo, body);
+}
 
-function docEditor(d, kind, existing) {
-  const r = d.request, prev = existing ? existing.payload : {}, org = d.person || boot.org;
+/* ---------- документ: заявление, уточнение, писмо, промяна на адрес ---------- */
+
+/* preset: начални стойности (напр. стария адрес при „Промяна на адрес“) */
+function docEditor(d, kind, existing, preset) {
+  const r = d.request, prev = Object.assign({}, preset || {}, existing ? existing.payload : {}), org = d.person || boot.org;
+  const isAddr = kind === 'Промяна на адрес';
   const base = {
     org, mode: r.mode, applicant: r.applicant, entity: r.entity, reqKind: r.kind, replyTo: d.replyTo, title: r.title,
     points: r.points, motives: r.motives, access: r.access, noPublish: r.noPublish === 'Да', accessEmail: d.replyTo, place: org.place, signMode: 'electronic'
   };
   const p0 = Object.assign({}, base, kind === 'Заявление' ? {} : { points: [], motives: '', title: kind === 'Писмо' ? '' : r.title }, prev);
-  if (kind === 'Уточнение' && !prev.ref) {
+  if ((kind === 'Уточнение' || isAddr) && !prev.ref) {
     const app = d.docs.find(x => x.kind === 'Заявление');
     p0.ref = { outNo: r.outNo || (app && app.outNo) || '', outDate: (app && app.date) || r.sentAt || '', entityRegNo: r.entityRegNo, entityRegDate: r.entityRegDate, letterNo: '', letterDate: r.clarifyAskedAt || '' };
   }
-  const points = kind === 'Писмо' ? null : pointsEditor(p0.points, kind === 'Уточнение' ? 'Уточнение (по точки)' : 'Искана информация (по точки)');
+  const points = kind === 'Писмо' || isAddr ? null : pointsEditor(p0.points, kind === 'Уточнение' ? 'Уточнение (по точки)' : 'Искана информация (по точки)');
   const accessBox = kind === 'Заявление' ? h('div', { class: 'field full' }, h('span', null, 'Форма на достъп'),
     boot.lists.accessForms.map((a, i) => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'acc_' + i, checked: (p0.access || []).includes(a) }), h('span', null, a)))) : null;
   const ref = p0.ref || {};
@@ -1368,10 +1423,17 @@ function docEditor(d, kind, existing) {
       field({ k: 'ref_letterNo', label: 'Писмо на субекта – изх. №', max: 60 }, ref.letterNo), field({ k: 'ref_letterDate', label: 'от дата', type: 'date' }, ref.letterDate),
       field({ k: 'ref_outNo', label: 'Наше заявление – Изх. №', max: 30 }, ref.outNo), field({ k: 'ref_outDate', label: 'от дата', type: 'date' }, ref.outDate),
       field({ k: 'ref_entityRegNo', label: 'Вх. № при субекта', max: 60 }, ref.entityRegNo), field({ k: 'ref_entityRegDate', label: 'от дата', type: 'date' }, ref.entityRegDate)] : null,
+    isAddr ? [
+      field({ k: 'ref_outNo', label: 'Заявление – Изх. №', max: 30 }, ref.outNo), field({ k: 'ref_outDate', label: 'от дата', type: 'date' }, ref.outDate),
+      field({ k: 'ref_entityRegNo', label: 'Вх. № при субекта', max: 60 }, ref.entityRegNo), field({ k: 'ref_entityRegDate', label: 'от дата', type: 'date' }, ref.entityRegDate),
+      field({ k: 'newReplyTo', label: 'Нов имейл за кореспонденция', type: 'email', req: true, max: 200 }, p0.newReplyTo || d.replyTo),
+      field({ k: 'oldReplyTo', label: 'Досегашен имейл', type: 'email', max: 200 }, p0.oldReplyTo || ''),
+      field({ k: 'newAddress', label: 'Адрес за кореспонденция (по желание)', max: 400, full: true }, p0.newAddress !== undefined ? p0.newAddress : (r.mode === 'Клиент' ? (r.applicant.address || '') : (org.address || ''))),
+      field({ k: 'effectiveDate', label: 'Считано от', type: 'date' }, p0.effectiveDate || todayIso())] : null,
     field({ k: 'salutation', label: 'Обръщение', max: 120, full: true }, p0.salutation || 'Уважаеми господин/госпожо,'),
     points,
     kind === 'Писмо' ? field({ k: 'body', label: 'Текст', type: 'textarea', rows: 10, max: 30000, full: true, req: true }, p0.body) : null,
-    kind !== 'Писмо' ? field({ k: 'motives', label: kind === 'Уточнение' ? 'Пояснения (по желание)' : 'Допълнителни мотиви (по желание)', type: 'textarea', rows: 5, max: 20000, full: true }, p0.motives) : null,
+    kind !== 'Писмо' && !isAddr ? field({ k: 'motives', label: kind === 'Уточнение' ? 'Пояснения (по желание)' : 'Допълнителни мотиви (по желание)', type: 'textarea', rows: 5, max: 20000, full: true }, p0.motives) : null,
     accessBox,
     kind === 'Заявление' ? field({ k: 'accessEmail', label: 'Имейл за получаване на информацията', type: 'email', max: 200 }, p0.accessEmail) : null,
     kind === 'Заявление' ? field({ k: 'noPublish', label: 'Несъгласие с публикуване на платформата (чл. 25, ал. 1, т. 5)', type: 'checkbox' }, p0.noPublish) : null,
@@ -1388,14 +1450,19 @@ function docEditor(d, kind, existing) {
     if (kind === 'Уточнение') p.clarifyBy = v.clarifyBy;
     if (kind === 'Уточнение') p.ref = { letterNo: v.ref_letterNo, letterDate: v.ref_letterDate, outNo: v.ref_outNo, outDate: v.ref_outDate, entityRegNo: v.ref_entityRegNo, entityRegDate: v.ref_entityRegDate };
     if (kind === 'Писмо') p.body = v.body;
+    if (isAddr) {
+      Object.assign(p, { newReplyTo: v.newReplyTo, oldReplyTo: v.oldReplyTo, newAddress: v.newAddress, effectiveDate: v.effectiveDate, replyTo: v.newReplyTo,
+        ref: { outNo: v.ref_outNo, outDate: v.ref_outDate, entityRegNo: v.ref_entityRegNo, entityRegDate: v.ref_entityRegDate } });
+      if (!p.title) p.title = r.title || '';
+    }
     if (points && !p.points.length) throw new Error('Добавете поне една точка.');
     return p;
   };
-  const status = h('p', { class: 'small muted' }, existing ? 'Изх. № ' + existing.outNo + ' се запазва.' : 'Изх. № (ЗДОИ-ГГГГ-NNNN) се дава при записване.');
+  const status = h('p', { class: 'small muted' }, existing ? 'Изх. № ' + existing.outNo + ' се запазва.' : 'Изх. № (' + (org.outPrefix || 'ЗДОИ') + '-ГГГГ-NNNN) се дава при записване.');
   const save = async (form, then) => {
     const p = collect(form);
     status.textContent = 'Записване…';
-    const res = await api('doc.reserve', { regNo: r.regNo, kind, title: p.title || kind, payload: p, outNo: existing ? existing.outNo : '' });
+    const res = await api('doc.reserve', { regNo: r.regNo, kind, title: isAddr ? 'Промяна на адреса за кореспонденция' : (p.title || kind), payload: p, outNo: existing ? existing.outNo : '' });
     Object.assign(p, { outNo: res.outNo, date: res.date });
     status.textContent = 'Генериране на PDF…';
     const pdf = await Docs.base64Of(Docs.DEFS[kind](p));
@@ -1813,7 +1880,7 @@ async function caseDossier(d) {
 async function mailInboxView() {
   loading();
   try {
-    const [{ mail, boxes }, { requests }] = await Promise.all([api('mail.inbox'), api('req.list')]);
+    const [{ mail, boxes }, { requests }] = await Promise.all([api('mail.inbox', { person: curCode || '' }), api('req.list', { person: curCode || '' })]);
     const list = h('datalist', { id: 'req-nos' }, requests.map(r => h('option', { value: r.regNo }, r.regNo + ' – ' + r.entityName)));
     setView(head('Неразпределена поща'), list,
       h('p', { class: 'small muted mb-12' }, 'Писмата до ' + (boxes && boxes.length ? boxes.join(', ') : boot.mailbox) + ' се разпределят автоматично по етикета след „+“, по номера на преписката или Изх. № в темата, или по имейла на субекта. Тук са писмата, които не са разпознати.'),
@@ -1998,6 +2065,33 @@ async function registerView(code) {
   draw();
 }
 
+/* ---------- избор на лице при отваряне ---------- */
+
+function personChooser() {
+  const all = personsAll();
+  $('app').replaceChildren(h('div', { class: 'gate' },
+    h('span', { class: 'logo-plate' }, h('img', { src: 'assets/logo-site.png', alt: 'ЗДОИ4You' })),
+    h('div', { class: 'card gate-card wide stack' },
+      h('div', null, h('h1', null, 'Изберете лице'), h('p', { class: 'muted' }, 'Здравейте, ' + me.name + '. Изберете от името на кое лице ще работите – таблото, заявленията, регистърът и пощата се показват само за него. Лицето се сменя от горната лента.')),
+      h('div', { class: 'person-grid' }, all.map(p => h('button', { type: 'button', class: 'person-card' + (p.active ? '' : ' off'), onclick: () => { setCur(p.code); $('app').replaceChildren(); if (!/^#\/(dashboard)?$/.test(location.hash)) location.hash = '#/dashboard'; route(); } },
+        h('span', { class: 'person-ico' }, icon('building')),
+        h('span', { class: 'person-body' }, h('b', null, p.name), h('small', null, [p.brand && p.brand !== p.name ? p.brand : '', p.eik ? 'ЕИК ' + p.eik : '', 'номера ' + (p.isDefault ? 'П-ГГГГ' : 'П-' + p.code.toUpperCase() + '-ГГГГ')].filter(Boolean).join(' · ')),
+          p.active ? null : h('span', { class: 'pill' }, 'спряно')))))),
+    h('p', { class: 'gate-foot' }, h('button', { type: 'button', class: 'btn sm', onclick: async () => { try { await api('logout'); } catch (_) { /* изтекла */ } endSession('Излязохте от системата.'); } }, 'Изход'))));
+}
+
+/* смяна на лицето от горната лента */
+function personSwitch() {
+  if (!manyPersons()) return null;
+  const p = curPerson();
+  return dropdown(h('button', { class: 'person-chip', title: 'Лице – смяна' }, icon('building'), h('span', { class: 'person-name' }, p ? (p.brand && !p.isDefault ? p.brand : p.name) : 'Изберете лице'), icon('chevron', 'sm')),
+    h('div', { class: 'dd-panel' }, h('div', { class: 'dd-head small muted' }, 'Работите от името на'),
+      personsAll().map(x => h('button', { type: 'button', class: x.code === curCode ? 'on' : '', onclick: () => {
+        if (x.code === curCode) return;
+        setCur(x.code); $('app').replaceChildren(); route(); toast('Лице: ' + x.name);
+      } }, icon('building'), h('span', null, x.name, x.active ? null : ' (спряно)')))));
+}
+
 /* ---------- маршрути ---------- */
 
 async function route() {
@@ -2014,6 +2108,7 @@ async function route() {
     return loginView(new URLSearchParams(query || '').get('err'));
   }
   if (['login', 'activate', 'forgot', 'code'].includes(page)) { location.hash = '#/dashboard'; return; }
+  if (!ensureCur()) return personChooser();
   shell();
   refreshCounts();
   const q = new URLSearchParams(query || '');
@@ -2035,7 +2130,7 @@ async function route() {
     case 'request': return parts[1] === 'new' ? requestEditView(null) : parts[2] === 'edit' ? requestEditView(parts[1]) : requestView(parts[1]);
     case 'mail': return mailInboxView();
     case 'persons': return isSuper() ? personsView() : failView(new Error('Само за суперадминистратор.'));
-    case 'register': return registerView(parts[1]);
+    case 'register': return registerView(parts[1] || curCode);
     case 'system': return isAdmin() ? systemView() : failView(new Error('Само за администратор.'));
     default: return setView(h('p', { class: 'err' }, 'Страницата не е намерена.'));
   }

@@ -70,6 +70,7 @@ export const ACTIONS = {
   'req.create': { auth: 'user', perm: 'casesEdit', fn: reqs.reqCreate },
   'req.update': { auth: 'user', perm: 'casesEdit', fn: reqs.reqUpdate },
   'req.assign': { auth: 'user', perm: 'casesEdit', fn: reqs.reqAssign },
+  'req.retag': { auth: 'user', perm: 'casesEdit', fn: reqs.reqRetag },
   'req.lock': { auth: 'user', perm: 'casesEdit', fn: reqs.reqLock },
   'req.comment': { auth: 'user', perm: 'casesEdit', fn: reqs.reqComment },
   'doc.reserve': { auth: 'user', perm: 'casesEdit', fn: reqs.docReserve },
