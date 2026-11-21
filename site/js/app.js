@@ -1222,7 +1222,17 @@ const bissMissing = () => h('div', { class: 'stack' },
   h('p', null, 'За КЕП на смарт карта е нужна безплатната програма B-Trust BISS. Тя работи и с карти на InfoNotary, StampIT и други доставчици.'),
   h('ol', { class: 'small' }, h('li', null, 'Изтеглете и инсталирайте BISS (нужни са администраторски права).'), h('li', null, 'Включете четеца с картата и стартирайте BISS (иконка до часовника).'),
     h('li', null, 'Ако картата не е от B-Trust, инсталирайте и удостоверителните вериги на вашия доставчик.'), h('li', null, 'Ако браузърът попита за достъп до устройства в локалната мрежа – разрешете.')),
+  /Firefox\//.test(navigator.userAgent) ? firefoxBissHint() : null,
   h('a', { class: 'btn primary', href: BISS_URL, target: '_blank', rel: 'noopener' }, 'Изтегли BISS'));
+
+/* Firefox не вярва на локалния сертификат на BISS (Chrome и Edge го взимат от Windows) – заявките към localhost отпадат */
+const firefoxBissHint = () => h('div', { class: 'stack' },
+  h('p', null, h('b', null, 'Ползвате Firefox? '), 'Ако BISS е стартиран, но не се намира, Firefox не приема сертификата на BISS на този компютър:'),
+  h('ol', { class: 'small' },
+    h('li', null, 'Отворете ', h('a', { href: 'https://localhost:53952/version', target: '_blank', rel: 'noopener' }, 'https://localhost:53952/version'),
+      ', изберете „Разширени…“ → „Приемане на риска и продължаване“. Трябва да се покаже номерът на версията на BISS.'),
+    h('li', null, 'Върнете се тук и опитайте отново.'),
+    h('li', null, 'Ако не помогне: в адресната лента въведете about:config, задайте security.enterprise_roots.enabled на true и рестартирайте Firefox. Firefox чете сертификатите на Windows само при стартиране, затова го рестартирайте и след инсталиране на BISS.')));
 
 /* вход (mode 'login') или свързване към профила ('link') с КЕП */
 async function kepFlow(mode) {
