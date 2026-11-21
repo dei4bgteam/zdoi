@@ -2,14 +2,14 @@
  * Преписки по ЗДОИ, срокове, решения (само отбелязване – документите не се генерират), съдебни дела и адресати.
  */
 
-import { ROLE_ADMIN } from './config.js';
 import { fail, str, line, stamp, todayIso, isoDate, oneOf, intIn, isEmail, validEik, view, byDesc, sofiaHour } from './util.js';
 import { term, termMonths, daysBetween } from './calendar.js';
 import { audit, mail, insertUnique } from './core.js';
 import { SCHEMA } from './schema.js';
 import { notifyOf, permsOf } from './auth.js';
 import { usersBrief } from './users.js';
-import { reqLists, reqDashboard, orgProfile, REG_BASIS } from './requests.js';
+import { reqLists, reqDashboard, orgProfile, REG_BASIS, reqScope } from './requests.js';
+import { personsFor } from './persons.js';
 import { mailboxAddress } from './mailbox.js';
 
 export const CASE_STATUS = ['Нова', 'В обработка', 'Чака уточняване', 'Чака трето лице', 'Решение издадено', 'Приключена'];
@@ -83,7 +83,9 @@ export async function bootstrap(d, ctx, app) {
   const [users, departments] = await Promise.all([usersBrief(app), app.store.list('departments')]);
   return {
     users, departments: departments.filter(x => x.active === 'Да').map(x => x.name), lists: Object.assign(lists(), reqLists()),
-    org: await orgProfile(app), mailbox: mailboxAddress(app.env), session: ctx.sessionExp
+    org: await orgProfile(app), mailbox: mailboxAddress(app.env), session: ctx.sessionExp, sessionMin: ctx.sessionMin,
+    // лицата, от чието име потребителят може да води преписки (с данните за бланката)
+    persons: await personsFor(app, ctx)
   };
 }
 
@@ -210,7 +212,7 @@ export async function caseAssign(d, ctx, app) {
 
 /* заключва отговорникът или администратор; отключва заключилият или администратор */
 export async function caseLock(d, ctx, app) {
-  const c = await findCase(app, d.regNo, ctx), want = d.locked === true, admin = ctx.role === ROLE_ADMIN;
+  const c = await findCase(app, d.regNo, ctx), want = d.locked === true, admin = !!ctx.admin;
   if (want === (c.locked === 'Да')) return { locked: want };
   if (want && !admin && c.owner !== ctx.username) fail('role', 'Преписката се заключва от отговорника или администратор.');
   if (!want && !admin && c.lockedBy !== ctx.username) fail('role', 'Преписката се отключва от заключилия я или администратор.');
@@ -280,7 +282,7 @@ const courtView = x => view(x);
 
 export async function courtList(d, ctx, app) {
   const cases = (await app.store.list('cases')).filter(c => canSee(c, ctx)).map(c => c.regNo)
-    .concat((await app.store.list('requests')).filter(r => canSee(r, ctx)).map(r => r.regNo));
+    .concat((await app.store.list('requests')).filter(await reqScope(app, ctx)).map(r => r.regNo));
   const rows = (await app.store.list('courts')).filter(x => !x.regNo || cases.includes(x.regNo) || ctx.perms.casesAll);
   return { courts: rows.map(courtView).sort(byDesc('at')), cases };
 }
@@ -321,7 +323,7 @@ export async function courtSave(d, ctx, app) {
 export async function courtDelete(d, ctx, app) {
   const cur = await app.store.get('courts', str(d.id, 20));
   if (!cur) fail('notfound', 'Делото не е намерено.');
-  if (ctx.role !== ROLE_ADMIN && cur.by !== ctx.username) fail('role', 'Делото се изтрива от въвелия го или администратор.');
+  if (!ctx.admin && cur.by !== ctx.username) fail('role', 'Делото се изтрива от въвелия го или администратор.');
   await app.store.remove('courts', cur._id);
   const title = cur.court + ' № ' + cur.caseNo + '/' + cur.year;
   if (cur.regNo) await event(app, cur.regNo, ctx.username, 'Дело', 'Изтрито дело: ' + title);

@@ -52,7 +52,7 @@ test('вход: еднократна връзка, бисквитка, изхо�
   assert.equal((await c.call('activate', Object.assign({ hash: pre('y') }, p))).error, 'invite'); // връзката е еднократна
   const l = await c.call('login', { username: 'admin', hash: pre('x') });
   assert.equal(l.ok, true);
-  assert.equal(l.me.role, 'Администратор');
+  assert.equal(l.me.role, 'Суперадминистратор');
   assert.equal(l.token, undefined); // ключът на сесията е само в бисквитката
   assert.ok(c.cookie.startsWith('adm_s='));
   assert.equal((await c.call('me')).me.username, 'admin');

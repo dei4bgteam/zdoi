@@ -20,9 +20,11 @@ import * as reqs from './requests.js';
 import * as oauth from './oauth.js';
 import * as acme from './acme.js';
 import * as kep from './kep.js';
-import { ROLE_ADMIN } from './config.js';
+import * as persons from './persons.js';
+import { ROLE_SUPER, isAdminRole } from './config.js';
+import { SCHEMA_VER } from './schema.js';
 
-/* auth: public | user | admin; perm: нужно право; */
+/* auth: public | user | admin | super; perm: нужно право; */
 export const ACTIONS = {
   login: { auth: 'public', fn: auth.login },
   'login.code': { auth: 'public', fn: auth.loginCode },
@@ -40,6 +42,7 @@ export const ACTIONS = {
   'twofa.start': { auth: 'user', fn: auth.twofaStart },
   'twofa.confirm': { auth: 'user', fn: auth.twofaConfirm },
   'notify.save': { auth: 'user', fn: auth.notifySave },
+  'session.save': { auth: 'user', fn: auth.sessionSave },
 
   bootstrap: { auth: 'user', fn: cases.bootstrap },
   dashboard: { auth: 'user', fn: cases.dashboard },
@@ -62,6 +65,7 @@ export const ACTIONS = {
   'logins.list': { auth: 'user', fn: users.loginsList },
 
   'req.list': { auth: 'user', fn: reqs.reqList },
+  'register.list': { auth: 'user', fn: reqs.registerList },
   'req.get': { auth: 'user', fn: reqs.reqGet },
   'req.create': { auth: 'user', perm: 'casesEdit', fn: reqs.reqCreate },
   'req.update': { auth: 'user', perm: 'casesEdit', fn: reqs.reqUpdate },
@@ -102,7 +106,10 @@ export const ACTIONS = {
 
   'users.list': { auth: 'admin', fn: users.usersList },
   'users.save': { auth: 'admin', fn: users.usersSave },
-  'users.invite': { auth: 'admin', fn: users.usersInvite }
+  'users.invite': { auth: 'admin', fn: users.usersInvite },
+
+  'persons.list': { auth: 'super', fn: persons.personsList },
+  'persons.save': { auth: 'super', fn: persons.personsSave }
 };
 
 /* ---------- среда ---------- */
@@ -134,7 +141,7 @@ function json(obj, status = 200, extra = {}) {
 function cookie(app, token) {
   const secure = app.cfg.appUrl.startsWith('https:') ? '; Secure' : '';
   return token
-    ? 'adm_s=' + token + '; Path=/api; HttpOnly; SameSite=Strict; Max-Age=' + CFG.SESSION_MIN * 60 * 4 + secure
+    ? 'adm_s=' + token + '; Path=/api; HttpOnly; SameSite=Strict; Max-Age=' + CFG.SESSION_MAX * 60 * 4 + secure
     : 'adm_s=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0' + secure;
 }
 
@@ -192,12 +199,12 @@ export async function setup(app, d) {
   if (!app.env.PEPPER || app.env.PEPPER.length < 32) fail('setup', 'Задайте тайната PEPPER (поне 32 знака): wrangler secret put PEPPER');
   const schema = await app.store.ensureSchema();
   const all = await app.store.list('users');
-  if (all.some(u => u.role === ROLE_ADMIN)) return { schema, admin: 'вече има администратор' };
-  const username = str(d.username || 'admin', 40).toLowerCase(), email = line(d.email, 200).toLowerCase(), name = line(d.name || 'Администратор', 120);
+  if (all.some(u => isAdminRole(u.role))) return { schema, admin: 'вече има администратор' };
+  const username = str(d.username || 'admin', 40).toLowerCase(), email = line(d.email, 200).toLowerCase(), name = line(d.name || 'Суперадминистратор', 120);
   if (!auth.USER_RE.test(username) || !isEmail(email)) fail('value', 'Посочете username и валиден email на първия администратор.');
   const inv = await auth.newInvite(CFG.INVITE_DAYS * 24);
-  await app.store.insert('users', { username, name, email, role: ROLE_ADMIN, active: 'Да', inviteHash: inv.hash, inviteExp: inv.exp, createdAt: stamp(), createdBy: 'настройка' });
-  await audit(app, 'настройка', 'Първи администратор', username, '');
+  await app.store.insert('users', { username, name, email, role: ROLE_SUPER, active: 'Да', inviteHash: inv.hash, inviteExp: inv.exp, createdAt: stamp(), createdBy: 'настройка' });
+  await audit(app, 'настройка', 'Първи суперадминистратор', username, '');
   const link = auth.inviteLink(app, username, inv.token);
   await auth.accessMail(app, email, username, link, CFG.INVITE_DAYS + ' дни');
   return { schema, admin: username, link };
@@ -216,6 +223,16 @@ async function handleSetup(req, env) {
     console.error(err && err.stack || err);
     return json({ ok: false, error: err.code || 'server', message: err.message }, 500);
   }
+}
+
+/* след обновяване на системата: липсващите списъци и колони в SharePoint се добавят веднъж за версията */
+async function upgradeSchema(app) {
+  if ((await app.kv.get('schemaVer')) === SCHEMA_VER) return;
+  try {
+    const r = await app.store.ensureSchema();
+    await app.kv.put('schemaVer', SCHEMA_VER);
+    console.log('структура на базата', JSON.stringify(r.created || []));
+  } catch (e) { console.error('структура на базата: ' + e.message); }
 }
 
 export default {
@@ -238,7 +255,7 @@ export default {
     const { store, kv } = services(env);
     const app = makeApp(env, store, kv, null);
     // пощата на приемната – на всеки 5 минути; напомнянията – веднъж на ден след 8:00 ч.
-    ctx.waitUntil(reqs.pollMail(app).then(r => console.log('поща', JSON.stringify(r)))
+    ctx.waitUntil(upgradeSchema(app).then(() => reqs.pollMail(app)).then(r => console.log('поща', JSON.stringify(r)))
       .then(() => cases.remindDeadlines(app)).then(r => console.log('напомняния', JSON.stringify(r)))
       .then(() => acme.ensureCert(app)).then(r => console.log('сертификат за КЕП', JSON.stringify(r))));
   }

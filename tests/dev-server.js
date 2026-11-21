@@ -44,10 +44,10 @@ async function preHash(username, password) {
 
 async function seed() {
   const app = makeApp(env, env.__store, env.__kv, null);
-  await setup(app, { username: 'admin', email: 'admin@example.org', name: 'Администратор' });
+  await setup(app, { username: 'admin', email: 'admin@example.org', name: 'Суперадминистратор' });
   const u = await auth.findUser(app, 'admin');
   await env.__store.patch('users', u._id, Object.assign(await auth.setPassword(app, await preHash('admin', 'admin-parola-123')), { inviteHash: '', inviteExp: '' }));
-  const ctx = { username: 'admin', name: 'Администратор', role: 'Администратор', perms: auth.permsOf(u) };
+  const ctx = { username: 'admin', name: 'Суперадминистратор', role: 'Суперадминистратор', admin: true, super: true, access: '*', perms: auth.permsOf(u) };
   const { caseCreate, courtSave } = await import('../worker/src/cases.js');
   const base = { kind: 'Достъп до обществена информация', channel: 'Писмено', applicantType: 'Гражданин' };
   const day = n => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);

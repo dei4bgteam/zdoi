@@ -5,14 +5,16 @@
  *   – входящата поща се разпределя по преписки: по етикета след „+“, по номера в темата или по имейла на субекта.
  */
 
-import { ROLE_ADMIN } from './config.js';
 import { fail, str, line, stamp, todayIso, isoDate, oneOf, intIn, isEmail, validEik, view, byDesc } from './util.js';
 import { term, termMonths, daysBetween } from './calendar.js';
 import { audit, mail, insertUnique, setting, setSetting } from './core.js';
 import { SCHEMA } from './schema.js';
 import { notifyOf } from './auth.js';
 import { usersBrief } from './users.js';
-import { getMailbox, plusAddress, mailboxAddress, fromB64 } from './mailbox.js';
+import { getMailbox, plusOf, mailboxAddress, fromB64 } from './mailbox.js';
+import { REG_BASIS, allPersons, personOf, codeOf, orgProfile, boxOf, regNoFor, outNoFor, allowedCodes, saveDefaultProfile } from './persons.js';
+
+export { REG_BASIS, orgProfile };
 
 export const REQ_STATUS = ['Чернова', 'Изпратено', 'Чака уточняване', 'Уточнено', 'Удължен срок', 'Получен отговор', 'Предоставен достъп', 'Частичен достъп', 'Отказ', 'Мълчалив отказ', 'Обжалвано', 'Приключено'];
 export const REQ_WAITING = ['Изпратено', 'Чака уточняване', 'Уточнено', 'Удължен срок'];
@@ -25,7 +27,6 @@ export const ACCESS_FORMS = [
   'Копия на хартиен носител (чл. 26, ал. 1, т. 3)',
   'Копия, предоставени по електронен път, или интернет адрес, на който се съхраняват или са публикувани данните (чл. 26, ал. 1, т. 4)'
 ];
-export const REG_BASIS = ['', 'ЕИК по Търговския закон (Търговски регистър)', 'Код по БУЛСТАТ (Закон за регистър БУЛСТАТ)'];
 export const SENT_HOW = ['', 'Имейл', 'Платформа за достъп (чл. 15в)', 'Сигурно електронно връчване', 'Поща', 'Куриер', 'На място'];
 /* канали извън имейла от системата: отбелязват се ръчно, с идентификатор и доказателство */
 export const CHANNELS = ['Сигурно електронно връчване', 'Поща', 'На място', 'Платформа за достъп (чл. 15в)', 'Куриер', 'Имейл'];
@@ -34,8 +35,8 @@ const PROOF_TYPES = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/pn
 export const DOC_KINDS = ['Заявление', 'Уточнение', 'Писмо'];
 const APPEALABLE = ['Частичен достъп', 'Отказ', 'Без разглеждане', 'Препратено (чл. 32)', 'Няма информация (чл. 33)'];
 
-/* П-2026-0001 → p2026-0001 (частта след „+“ в адреса трябва да е на латиница) */
-export const tagOf = regNo => 'p' + String(regNo).replace(/^П-/, '');
+/* П-2026-0001 → p2026-0001, П-ABC-2026-0001 → pabc-2026-0001 (частта след „+“ в адреса трябва да е на латиница) */
+export const tagOf = regNo => 'p' + String(regNo).replace(/^П-/, '').toLowerCase();
 
 /* ---------- срокове от страната на заявителя ---------- */
 
@@ -66,30 +67,24 @@ export function withReqDue(r, today) {
   return o;
 }
 
-const canSee = (r, ctx) => !!ctx.perms.casesAll || r.owner === ctx.username || r.createdBy === ctx.username;
+/*
+ * Видимост: само преписките на лицата, до които потребителят има достъп; от тях – всички (право „всички преписки“)
+ * или възложените на него и въведените от него.
+ */
+export async function reqScope(app, ctx) {
+  const codes = await allowedCodes(app, ctx);
+  return r => codes.includes(codeOf(r)) && (!!ctx.perms.casesAll || r.owner === ctx.username || r.createdBy === ctx.username);
+}
 
-async function findReq(app, regNo, ctx) {
-  const r = (await app.store.list('requests', { regNo: line(regNo, 30) }))[0];
-  if (!r || !canSee(r, ctx)) fail('notfound', 'Преписката не е намерена.');
+export async function findReq(app, regNo, ctx) {
+  const r = (await app.store.list('requests', { regNo: line(regNo, 40) }))[0];
+  if (!r || !(await reqScope(app, ctx))(r)) fail('notfound', 'Преписката не е намерена.');
   return r;
 }
 const unlocked = r => { if (r.locked === 'Да') fail('caselocked', 'Преписката е заключена от ' + (r.lockedBy || 'администратор') + '.'); };
 const event = (app, regNo, user, kind, text) => app.store.insert('events', { regNo, at: stamp(), user, kind, text: String(text).slice(0, 4000) });
 
 export const reqLists = () => ({ reqStatuses: REQ_STATUS, reqKinds: REQ_KIND, reqModes: REQ_MODE, reqOutcomes: REQ_OUTCOME, accessForms: ACCESS_FORMS, regBasis: REG_BASIS, sentHow: SENT_HOW, docKinds: DOC_KINDS, channels: CHANNELS, postKinds: POST_KINDS });
-
-/* ---------- профил на Сдружението (заявител и бланка) ---------- */
-
-export const ORG_DEFAULT = {
-  name: 'Сдружение „Просвета за демокрация“', brand: 'ЗДОИ4You', regBasis: REG_BASIS[2], eik: '', address: '', oblast: '',
-  rep: '', repPosition: 'председател на Управителния съвет', phone: '', email: 'priemna@zdoi.eu', web: 'my.zdoi4you.eu', place: 'София'
-};
-
-export async function orgProfile(app) {
-  let o = {};
-  try { o = JSON.parse((await setting(app, 'org', '{}')) || '{}'); } catch (_) { o = {}; }
-  return Object.assign({}, ORG_DEFAULT, o);
-}
 
 /* ---------- данни на заявителя и субекта ---------- */
 
@@ -105,7 +100,7 @@ function party(d, label, needEmail) {
   return p;
 }
 
-function reqFields(d) {
+function reqFields(d, person) {
   const mode = oneOf(d.mode || 'Сдружението', REQ_MODE, 'Заявител');
   const applicant = mode === 'Клиент' ? party(d.applicant || {}, 'заявителя', true) : {};
   if (mode === 'Клиент' && !applicant.address && !applicant.email) fail('required', 'Посочете адрес или имейл на заявителя (чл. 25, ал. 1, т. 4).');
@@ -113,7 +108,7 @@ function reqFields(d) {
   const points = (Array.isArray(d.points) ? d.points : []).map(p => str(p, 4000)).filter(Boolean).slice(0, 60);
   const access = (Array.isArray(d.access) ? d.access : []).filter(a => ACCESS_FORMS.includes(a));
   return {
-    mode, applicant: JSON.stringify(applicant), applicantName: mode === 'Клиент' ? applicant.name : 'ЗДОИ4You',
+    mode, applicant: JSON.stringify(applicant), applicantName: mode === 'Клиент' ? applicant.name : (person.brand || person.name),
     entity: JSON.stringify(entity), entityId: entity.id, entityName: entity.name, entityEmail: entity.email,
     kind: oneOf(d.kind || REQ_KIND[0], REQ_KIND, 'Вид'), title: line(d.title, 250), points: JSON.stringify(points), motives: str(d.motives, 20000),
     access: JSON.stringify(access), noPublish: d.noPublish === true || d.noPublish === 'Да' ? 'Да' : 'Не'
@@ -123,9 +118,10 @@ function reqFields(d) {
 /* ---------- преписки ---------- */
 
 export async function reqList(d, ctx, app) {
-  const today = todayIso();
-  const rows = (await app.store.list('requests')).filter(r => canSee(r, ctx)).map(r => {
+  const today = todayIso(), see = await reqScope(app, ctx);
+  const rows = (await app.store.list('requests')).filter(see).map(r => {
     const o = withReqDue(r, today);
+    o.person = codeOf(r);
     delete o.motives; delete o.appealNote; delete o.notes;
     o.pointsCount = o.points.length; delete o.points;
     return o;
@@ -138,8 +134,10 @@ export async function reqGet(d, ctx, app) {
   const [docs, mails, events, courts] = await Promise.all([
     app.store.list('docs', { regNo: r.regNo }), app.store.list('mail', { regNo: r.regNo }), app.store.list('events', { regNo: r.regNo }), app.store.list('courts')
   ]);
+  const person = await personOf(app, codeOf(r)), box = boxOf(app, person);
   return {
-    request: withReqDue(r, todayIso()), replyTo: plusAddress(app.env, r.tag), mailbox: mailboxAddress(app.env),
+    request: Object.assign(withReqDue(r, todayIso()), { person: person.code }), person,
+    replyTo: plusOf(box, r.tag || tagOf(r.regNo)), mailbox: box,
     docs: docs.map(x => Object.assign(view(x), { payload: safeJson(x.payload) })).sort(byDesc('at')),
     mail: mails.map(mailView).sort(byDesc('at')), events: events.map(view).reverse(),
     courts: courts.filter(x => x.regNo === r.regNo).map(view)
@@ -148,7 +146,14 @@ export async function reqGet(d, ctx, app) {
 
 const safeJson = t => { try { return JSON.parse(t || '{}'); } catch (_) { return {}; } };
 /* празна колона в SharePoint е null и не се намира с eq '', затова се филтрира тук */
-const unassigned = async app => (await app.store.list('mail')).filter(m => !m.regNo && m.direction === 'Входяща');
+/* boxes: само писмата до тези кутии (тези на лицата, до които потребителят има достъп) */
+const unassigned = async (app, boxes) => (await app.store.list('mail'))
+  .filter(m => !m.regNo && m.direction === 'Входяща' && (!boxes || boxes.includes(m.box || mailboxAddress(app.env))));
+/* кутиите на лицата, до които потребителят има достъп */
+async function myBoxes(app, ctx) {
+  const codes = await allowedCodes(app, ctx);
+  return [...new Set((await allPersons(app)).filter(p => codes.includes(p.code)).map(p => boxOf(app, p)))];
+}
 const mailView = m => Object.assign(view(m), { attachments: safeJson(m.attachments || '[]'), to: m.to, graphId: undefined });
 
 async function checkOwner(app, owner) {
@@ -157,11 +162,22 @@ async function checkOwner(app, owner) {
   return owner;
 }
 
+/* лицето, от чието име е новата преписка: трябва потребителят да има достъп до него и то да е активно */
+async function personFor(app, ctx, code) {
+  const all = await allPersons(app);
+  const p = code ? all.find(x => x.code === code) : all.find(x => x.isDefault);
+  if (!p || !(await allowedCodes(app, ctx)).includes(p.code)) fail('role', 'Нямате достъп до преписките на това лице.');
+  if (!p.active) fail('value', 'Лицето е спряно – не се създават нови преписки от негово име.');
+  return p;
+}
+
 export async function reqCreate(d, ctx, app) {
-  const v = reqFields(d);
+  const person = await personFor(app, ctx, line(d.person, 10));
+  const v = reqFields(d, person);
   v.owner = await checkOwner(app, line(d.owner, 40));
+  v.person = person.code;
   const y = todayIso().slice(0, 4);
-  const rec = await insertUnique(app, 'requests', {}, 'regNo', n => 'П-' + y + '-' + String(n).padStart(4, '0'),
+  const rec = await insertUnique(app, 'requests', {}, 'regNo', n => regNoFor(person, y, n),
     Object.assign({ createdAt: stamp(), createdBy: ctx.username, updatedAt: stamp(), status: 'Чернова' }, v));
   await app.store.patch('requests', rec._id, { tag: tagOf(rec.regNo) });
   await event(app, rec.regNo, ctx.username, 'Създаване', 'Преписката е създадена.');
@@ -174,7 +190,8 @@ const DATES = ['sentAt', 'entityRegDate', 'clarifyAskedAt', 'clarifySentAt', 'de
 export async function reqUpdate(d, ctx, app) {
   const r = await findReq(app, d.regNo, ctx);
   unlocked(r);
-  const v = d.contentOnly ? reqFields(d) : Object.assign(reqFields(d), {
+  const person = await personOf(app, codeOf(r));
+  const v = d.contentOnly ? reqFields(d, person) : Object.assign(reqFields(d, person), {
     status: oneOf(d.status || r.status, REQ_STATUS, 'Статус'), sentHow: oneOf(d.sentHow || '', SENT_HOW, 'Начин на изпращане'),
     entityRegNo: line(d.entityRegNo, 60), ext30: intIn(d.ext30, 0, 10, 'Удължаване по чл. 30'), ext31: intIn(d.ext31, 0, 14, 'Удължаване по чл. 31'),
     decisionNo: line(d.decisionNo, 60), outcome: oneOf(d.outcome || '', REQ_OUTCOME, 'Резултат'),
@@ -210,7 +227,7 @@ export async function reqAssign(d, ctx, app) {
 }
 
 export async function reqLock(d, ctx, app) {
-  const r = await findReq(app, d.regNo, ctx), want = d.locked === true, admin = ctx.role === ROLE_ADMIN;
+  const r = await findReq(app, d.regNo, ctx), want = d.locked === true, admin = !!ctx.admin;
   if (want === (r.locked === 'Да')) return { locked: want };
   if (want && !admin && r.owner !== ctx.username) fail('role', 'Заключва отговорникът или администратор.');
   if (!want && !admin && r.lockedBy !== ctx.username) fail('role', 'Отключва заключилият или администратор.');
@@ -254,8 +271,8 @@ export async function docReserve(d, ctx, app) {
     await event(app, r.regNo, ctx.username, 'Документ', 'Редактиран: ' + doc.kind + ' изх. № ' + doc.outNo);
     return { outNo: doc.outNo, date: doc.date };
   }
-  const date = todayIso(), y = date.slice(0, 4);
-  const rec = await insertUnique(app, 'docs', {}, 'outNo', n => 'ЗДОИ-' + y + '-' + String(n).padStart(4, '0'),
+  const date = todayIso(), y = date.slice(0, 4), person = await personOf(app, codeOf(r));
+  const rec = await insertUnique(app, 'docs', {}, 'outNo', n => outNoFor(person, y, n),
     { regNo: r.regNo, kind, date, title, payload, by: ctx.username, at: stamp() });
   if (kind === 'Заявление' && !r.outNo) await app.store.patch('requests', r._id, { outNo: rec.outNo, updatedAt: stamp() });
   await event(app, r.regNo, ctx.username, 'Документ', kind + ' изх. № ' + rec.outNo);
@@ -313,16 +330,18 @@ export async function mailSend(d, ctx, app) {
     if (!m || m.regNo !== r.regNo) fail('notfound', 'Писмото не е намерено.');
     replyToGraphId = m.graphId;
   }
-  const replyTo = plusAddress(app.env, r.tag || tagOf(r.regNo));
+  // от кутията на лицето на преписката, с адрес за отговор с етикета на преписката
+  const box = boxOf(app, await personOf(app, codeOf(r)));
+  const replyTo = plusOf(box, r.tag || tagOf(r.regNo));
   try {
-    await getMailbox(app.env).send({ to, cc, subject, text, replyTo, attachments, replyToGraphId });
+    await getMailbox(app.env, box).send({ to, cc, subject, text, replyTo, attachments, replyToGraphId });
   } catch (e) {
     console.error('mail.send: ' + e.message);
     fail('mail', 'Писмото не е изпратено: ' + e.message.slice(0, 200));
   }
   const at = stamp();
   await app.store.insert('mail', {
-    regNo: r.regNo, direction: 'Изходяща', channel: 'Имейл', at, from: mailboxAddress(app.env), to: to.join(', '), cc: cc.join(', '), subject, body: text,
+    regNo: r.regNo, direction: 'Изходяща', channel: 'Имейл', box, at, from: box, to: to.join(', '), cc: cc.join(', '), subject, body: text,
     attachments: JSON.stringify(attachments.map(a => ({ name: a.name, size: a.bytes.length }))), docOutNo: docs.map(x => x.outNo).join(', '), by: ctx.username, messageId: 'out:' + r.regNo + ':' + Date.now()
   });
   await markSent(app, r, docs, at, 'Имейл', to.join(', '));
@@ -400,11 +419,11 @@ export async function mailRecord(d, ctx, app) {
 
   const at = date === today ? stamp() : date + 'T00:00:00';
   const who = out ? party || (r.entityName || '') : '';
-  const org = (await orgProfile(app)).name;
+  const person = await personOf(app, codeOf(r)), org = person.name;
   const body = [postKind, ref ? (channel === 'Сигурно електронно връчване' ? 'Идентификатор в ССЕВ: ' : channel === 'Поща' || channel === 'Куриер' ? '№ на пратката: ' : out ? 'Идентификатор: ' : 'Изх. № на подателя: ') + ref : '',
     entityRegNo ? 'Вх. № при субекта: ' + entityRegNo + (entityRegDate ? ' от ' + entityRegDate.split('-').reverse().join('.') : '') : '', note].filter(Boolean).join('\n');
   const rec = await app.store.insert('mail', {
-    regNo: r.regNo, direction: out ? 'Изходяща' : 'Входяща', channel, ref, at, subject, body,
+    regNo: r.regNo, direction: out ? 'Изходяща' : 'Входяща', channel, ref, at, subject, body, box: boxOf(app, person),
     from: out ? org : party || (r.entityName || ''), to: out ? who : org, cc: '',
     attachments: JSON.stringify(atts), docOutNo: docs.map(x => x.outNo).join(', '), by: ctx.username, messageId: 'rec:' + r.regNo + ':' + Date.now()
   });
@@ -419,13 +438,14 @@ export async function mailRecord(d, ctx, app) {
 
 export async function mailInbox(d, ctx, app) {
   if (!ctx.perms.casesAll) fail('role', 'Неразпределената поща се вижда от потребители с право „всички преписки“.');
-  return { mail: (await unassigned(app)).map(mailView).sort(byDesc('at')) };
+  const boxes = await myBoxes(app, ctx);
+  return { mail: (await unassigned(app, boxes)).map(mailView).sort(byDesc('at')), boxes };
 }
 
 export async function mailAssign(d, ctx, app) {
   if (!ctx.perms.casesAll) fail('role', 'Нямате право за това действие.');
   const m = await app.store.get('mail', str(d.id, 20));
-  if (!m) fail('notfound', 'Писмото не е намерено.');
+  if (!m || !(await myBoxes(app, ctx)).includes(m.box || mailboxAddress(app.env))) fail('notfound', 'Писмото не е намерено.');
   const r = await findReq(app, d.regNo, ctx);
   await app.store.patch('mail', m._id, { regNo: r.regNo, matched: 'ръчно (' + ctx.username + ')' });
   await event(app, r.regNo, ctx.username, 'Входящо писмо', 'Разпределено ръчно: ' + m.from + ' – ' + m.subject);
@@ -435,7 +455,8 @@ export async function mailAssign(d, ctx, app) {
 export async function mailAttachment(d, ctx, app) {
   const m = await app.store.get('mail', str(d.id, 20));
   if (!m) fail('notfound', 'Писмото не е намерено.');
-  if (m.regNo) await findReq(app, m.regNo, ctx); else if (!ctx.perms.casesAll) fail('notfound', 'Писмото не е намерено.');
+  if (m.regNo) await findReq(app, m.regNo, ctx);
+  else if (!ctx.perms.casesAll || !(await myBoxes(app, ctx)).includes(m.box || mailboxAddress(app.env))) fail('notfound', 'Писмото не е намерено.');
   const a = safeJson(m.attachments || '[]')[Number(d.index)];
   if (!a || !a.fileId) fail('notfound', 'Файлът не е намерен.');
   return { name: a.name, contentType: a.contentType || 'application/octet-stream', data: b64(await app.store.downloadFile(a.fileId)) };
@@ -459,18 +480,20 @@ function matchSsev(msg, requests) {
   return pick.length === 1 ? [pick[0], 'ССЕВ: ' + pick[0].entityName] : [null, ''];
 }
 
-export async function matchRequest(app, msg, requests) {
-  const local = mailboxAddress(app.env).split('@')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/* box: кутията, в която е получено писмото; requests: преписките на лицата с тази кутия */
+export async function matchRequest(app, msg, requests, box) {
+  const local = String(box || mailboxAddress(app.env)).split('@')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const plus = new RegExp('^' + local + '\\+([a-z0-9-]+)@', 'i');
   for (const a of [...msg.to, ...msg.cc]) {
     const m = plus.exec(a);
     if (m) { const r = requests.find(x => (x.tag || tagOf(x.regNo)) === m[1].toLowerCase()); if (r) return [r, 'етикет +' + m[1]]; }
   }
-  let m = /П-(\d{4})-(\d{4})/.exec(msg.subject);
-  if (m) { const r = requests.find(x => x.regNo === 'П-' + m[1] + '-' + m[2]); if (r) return [r, 'номер в темата']; }
-  m = /ЗДОИ-(\d{4})-(\d{4})/.exec(msg.subject + ' ' + msg.body.slice(0, 4000));
-  if (m) {
-    const doc = (await app.store.list('docs', { outNo: 'ЗДОИ-' + m[1] + '-' + m[2] }))[0];
+  let m = /П-(?:([A-Z][A-Z0-9]{1,9})-)?(\d{4})-(\d{4})/.exec(msg.subject);
+  if (m) { const no = 'П-' + (m[1] ? m[1] + '-' : '') + m[2] + '-' + m[3]; const r = requests.find(x => x.regNo === no); if (r) return [r, 'номер в темата']; }
+  // Изх. № на документ: префиксът е на лицето (ЗДОИ-2026-0001, АБВ-2026-0001…)
+  const outNos = [...new Set((msg.subject + ' ' + msg.body.slice(0, 4000)).match(/(?<![A-ZА-Я0-9-])[A-ZА-Я0-9]{2,10}-\d{4}-\d{4}/g) || [])].slice(0, 5);
+  for (const no of outNos) {
+    const doc = (await app.store.list('docs', { outNo: no }))[0];
     const r = doc && requests.find(x => x.regNo === doc.regNo);
     if (r) return [r, 'Изх. № ' + doc.outNo];
   }
@@ -480,20 +503,40 @@ export async function matchRequest(app, msg, requests) {
   return [null, ''];
 }
 
+/* кутията на приемната пази старото име на настройката; другите – със суфикс */
+const markKey = (app, box) => box === mailboxAddress(app.env) ? 'mailWatermark' : 'mailWatermark:' + box;
+
+/* всички кутии: тази на приемната и собствените кутии на активните лица */
 export async function pollMail(app, { manual } = {}) {
   if (!manual && (await setting(app, 'mailPoll', 'Да')) !== 'Да') return { skipped: 'изключено' };
-  const since = (await setting(app, 'mailWatermark', '')) || new Date(Date.now() - 86400000).toISOString();
-  const run = { at: stamp(), fetched: 0, saved: 0, matched: 0, error: '' };
+  const persons = await allPersons(app);
+  const boxes = [...new Set([mailboxAddress(app.env)].concat(persons.filter(p => p.active).map(p => boxOf(app, p))))];
+  const requests = await app.store.list('requests');
+  const run = { at: stamp(), fetched: 0, saved: 0, matched: 0, error: '', boxes: [] };
+  for (const box of boxes) {
+    const codes = persons.filter(p => boxOf(app, p) === box).map(p => p.code);
+    const one = await pollBox(app, box, requests.filter(r => codes.includes(codeOf(r))));
+    ['fetched', 'saved', 'matched'].forEach(k => { run[k] += one[k]; });
+    if (one.error) run.error = (run.error ? run.error + '; ' : '') + (boxes.length > 1 ? box + ': ' : '') + one.error;
+    run.boxes.push(Object.assign({ box }, one));
+  }
+  await setSetting(app, 'mailLastRun', JSON.stringify(run));
+  return run;
+}
+
+async function pollBox(app, box, requests) {
+  const key = markKey(app, box);
+  const since = (await setting(app, key, '')) || new Date(Date.now() - 86400000).toISOString();
+  const run = { fetched: 0, saved: 0, matched: 0, error: '' };
   try {
-    const msgs = await getMailbox(app.env).fetchSince(since);
+    const msgs = await getMailbox(app.env, box).fetchSince(since);
     run.fetched = msgs.length;
-    const requests = await app.store.list('requests');
     let mark = since;
     for (const msg of msgs) {
       if (msg.at > mark) mark = msg.at;
       if ((await app.store.list('mail', { messageId: msg.messageId })).length) continue;
-      if (msg.from.toLowerCase() === mailboxAddress(app.env)) continue; // собствените писма
-      const [r, how] = await matchRequest(app, msg, requests);
+      if (msg.from.toLowerCase() === box) continue; // собствените писма
+      const [r, how] = await matchRequest(app, msg, requests, box);
       const folder = (r ? r.regNo : 'Неразпределени') + '/' + msg.at.slice(0, 10);
       const atts = [];
       for (const a of msg.attachments.slice(0, 20)) {
@@ -502,7 +545,7 @@ export async function pollMail(app, { manual } = {}) {
         atts.push({ name: a.name, size: a.bytes.length, contentType: a.contentType, fileId: f.id, url: f.webUrl });
       }
       await app.store.insert('mail', {
-        regNo: r ? r.regNo : '', messageId: msg.messageId, direction: 'Входяща', at: stamp(new Date(msg.at)), from: msg.from + (msg.fromName ? ' (' + msg.fromName + ')' : ''),
+        regNo: r ? r.regNo : '', messageId: msg.messageId, direction: 'Входяща', box, at: stamp(new Date(msg.at)), from: msg.from + (msg.fromName ? ' (' + msg.fromName + ')' : ''),
         to: msg.to.join(', '), cc: msg.cc.join(', '), subject: msg.subject, body: msg.body.slice(0, 60000), graphId: msg.graphId,
         attachments: JSON.stringify(atts), matched: how, channel: isSsev(msg) ? 'Сигурно електронно връчване' : 'Имейл'
       });
@@ -511,17 +554,16 @@ export async function pollMail(app, { manual } = {}) {
         run.matched++;
         const ssev = isSsev(msg);
         await event(app, r.regNo, 'поща', ssev ? 'Съобщение в ССЕВ' : 'Входящо писмо', ssev
-          ? 'Ново съобщение в ССЕВ от ' + r.entityName + ' – прочетете го в профила на Сдружението в edelivery.egov.bg и го регистрирайте („Регистрирай получено“).'
+          ? 'Ново съобщение в ССЕВ от ' + r.entityName + ' – прочетете го в edelivery.egov.bg (профила, от който е подадено заявлението) и го регистрирайте („Регистрирай получено“).'
           : msg.from + ': ' + msg.subject + (atts.length ? ' (' + atts.length + ' прикачени)' : ''));
-        await notifyOwner(app, null, r, ssev ? 'Ново съобщение в ССЕВ от ' + r.entityName + '. Отворете профила на Сдружението в edelivery.egov.bg.' : 'Получено писмо от ' + msg.from + ': ' + msg.subject, 'mail');
+        await notifyOwner(app, null, r, ssev ? 'Ново съобщение в ССЕВ от ' + r.entityName + '. Отворете edelivery.egov.bg (профила, от който е подадено заявлението).' : 'Получено писмо от ' + msg.from + ': ' + msg.subject, 'mail');
       }
     }
-    await setSetting(app, 'mailWatermark', mark);
+    await setSetting(app, key, mark);
   } catch (e) {
     run.error = String(e.message || e).slice(0, 300);
-    console.error('pollMail: ' + run.error);
+    console.error('pollMail ' + box + ': ' + run.error);
   }
-  await setSetting(app, 'mailLastRun', JSON.stringify(run));
   return run;
 }
 
@@ -530,31 +572,20 @@ export async function pollMail(app, { manual } = {}) {
 export async function systemGet(d, ctx, app) {
   const docs = await app.store.list('docs');
   const y = todayIso().slice(0, 4), used = new Set(docs.map(x => x.outNo));
-  let n = 1;
-  while (used.has('ЗДОИ-' + y + '-' + String(n).padStart(4, '0'))) n++;
+  const next = p => { let n = 1; while (used.has(outNoFor(p, y, n))) n++; return outNoFor(p, y, n); };
+  const persons = await allPersons(app), def = persons.find(p => p.isDefault);
   return {
-    org: await orgProfile(app), mailbox: mailboxAddress(app.env), sampleReplyTo: plusAddress(app.env, 'p' + y + '-0001'),
+    org: await orgProfile(app), mailbox: mailboxAddress(app.env), sampleReplyTo: plusOf(mailboxAddress(app.env), 'p' + y + '-0001'),
     mailPoll: (await setting(app, 'mailPoll', 'Да')) === 'Да', mailWatermark: await setting(app, 'mailWatermark', ''),
-    mailLastRun: safeJson(await setting(app, 'mailLastRun', '{}')), nextOutNo: 'ЗДОИ-' + y + '-' + String(n).padStart(4, '0'),
+    mailLastRun: safeJson(await setting(app, 'mailLastRun', '{}')), nextOutNo: next(def),
+    registers: persons.map(p => ({ code: p.code, name: p.name, active: p.active, box: boxOf(app, p), nextOutNo: next(p), regNo: regNoFor(p, y, 1).replace(/0001$/, 'NNNN') })),
     unassigned: (await unassigned(app)).length,
     lastReminder: await app.kv.get('remind:' + todayIso()) ? 'днес' : 'не днес'
   };
 }
 
 export async function systemSave(d, ctx, app) {
-  if (d.org) {
-    const o = d.org;
-    const v = {
-      name: line(o.name, 250), brand: line(o.brand, 60) || 'ЗДОИ4You', regBasis: oneOf(o.regBasis || '', REG_BASIS, 'Регистрация'), eik: line(o.eik, 13),
-      address: line(o.address, 400), oblast: line(o.oblast, 80), rep: line(o.rep, 160), repPosition: line(o.repPosition, 160),
-      phone: line(o.phone, 40), email: line(o.email, 200).toLowerCase(), web: line(o.web, 120), place: line(o.place, 80)
-    };
-    if (!v.name) fail('required', 'Посочете наименование.');
-    if (v.eik && !validEik(v.eik)) fail('eik', 'Невалиден ЕИК/код по БУЛСТАТ.');
-    if (v.email && !isEmail(v.email)) fail('email', 'Невалиден имейл.');
-    await setSetting(app, 'org', JSON.stringify(v));
-    await audit(app, ctx.username, 'Промяна на профила на Сдружението', '', '');
-  }
+  if (d.org) await saveDefaultProfile(app, ctx, d.org);
   if (typeof d.mailPoll === 'boolean') {
     await setSetting(app, 'mailPoll', d.mailPoll ? 'Да' : 'Не');
     await audit(app, ctx.username, d.mailPoll ? 'Включено автоматично четене на пощата' : 'Спряно автоматично четене на пощата', '', '');
@@ -571,14 +602,29 @@ export async function systemPoll(d, ctx, app) {
 /* ---------- табло ---------- */
 
 export async function reqDashboard(app, ctx) {
-  const today = todayIso();
-  const rows = (await app.store.list('requests')).filter(r => canSee(r, ctx)).map(r => withReqDue(r, today));
+  const today = todayIso(), see = await reqScope(app, ctx);
+  const rows = (await app.store.list('requests')).filter(see).map(r => withReqDue(r, today));
   const brief = r => ({ regNo: r.regNo, entityName: r.entityName, status: r.status, due: r.due, dueLabel: r.dueLabel, daysLeft: r.daysLeft, ours: r.ours, silentBy: r.silentBy, silentDays: r.silentDays, appealBy: r.appealBy, appealDays: r.appealDays });
   return {
     reqTotal: rows.length, reqDrafts: rows.filter(r => r.status === 'Чернова').length,
     reqWaiting: rows.filter(r => r.due).map(brief).sort((a, b) => a.due.localeCompare(b.due)),
     reqSilent: rows.filter(r => r.due && !r.ours && r.daysLeft < 0 && r.silentDays >= 0).map(brief),
     reqAppeals: rows.filter(r => r.appealDays !== null && r.appealDays >= 0).map(brief),
-    unassignedMail: ctx.perms.casesAll ? (await unassigned(app)).length : 0
+    unassignedMail: ctx.perms.casesAll ? (await unassigned(app, await myBoxes(app, ctx))).length : 0
   };
+}
+
+/* ---------- изходящ регистър на лицето: всички документи с Изх. № ---------- */
+
+export async function registerList(d, ctx, app) {
+  const codes = await allowedCodes(app, ctx);
+  const code = line(d.person, 10) || codes[0];
+  if (!codes.includes(code)) fail('role', 'Нямате достъп до регистъра на това лице.');
+  const see = await reqScope(app, ctx);
+  const reqs = new Map((await app.store.list('requests')).filter(r => codeOf(r) === code && see(r)).map(r => [r.regNo, r]));
+  const docs = (await app.store.list('docs')).filter(x => reqs.has(x.regNo)).map(x => {
+    const r = reqs.get(x.regNo);
+    return { outNo: x.outNo, date: x.date, kind: x.kind, title: x.title, regNo: x.regNo, entityName: r.entityName, sentAt: x.sentAt, sentHow: x.sentHow, sentTo: x.sentTo, signed: /"_sig"\s*:/.test(x.payload || ''), by: x.by };
+  }).sort((a, b) => String(b.outNo).localeCompare(String(a.outNo)));
+  return { person: await personOf(app, code), docs, requests: reqs.size };
 }

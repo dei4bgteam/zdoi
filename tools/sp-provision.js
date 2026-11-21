@@ -13,7 +13,7 @@ import { SharePointStore } from '../worker/src/store/sharepoint.js';
 import { graph } from '../worker/src/graph.js';
 import { newInvite, inviteLink } from '../worker/src/auth.js';
 import { stamp } from '../worker/src/util.js';
-import { CFG, ROLE_ADMIN } from '../worker/src/config.js';
+import { CFG, ROLE_SUPER, isAdminRole } from '../worker/src/config.js';
 
 const arg = (name, def) => { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : def; };
 const TENANT = arg('tenant', 'bulmail.eu');
@@ -83,15 +83,15 @@ const { created } = await store.ensureSchema();
 console.log(created.length ? 'Създадени: ' + created.join(', ') : 'Всички списъци и колони вече съществуват.');
 
 const users = await store.list('users');
-if (users.some(u => u.role === ROLE_ADMIN)) {
+if (users.some(u => isAdminRole(u.role))) {
   console.log('Администратор вече има – не се създава нов.');
 } else {
   const inv = await newInvite(CFG.INVITE_DAYS * 24);
   await store.insert('users', {
-    username: USERNAME, name: me.displayName, email: String(me.mail || me.userPrincipalName).toLowerCase(), role: ROLE_ADMIN, active: 'Да',
+    username: USERNAME, name: me.displayName, email: String(me.mail || me.userPrincipalName).toLowerCase(), role: ROLE_SUPER, active: 'Да',
     inviteHash: inv.hash, inviteExp: inv.exp, createdAt: stamp(), createdBy: 'sp-provision'
   });
-  await store.insert('log', { at: stamp(), actor: 'sp-provision', action: 'Първи администратор', ref: USERNAME, details: '' });
+  await store.insert('log', { at: stamp(), actor: 'sp-provision', action: 'Първи суперадминистратор', ref: USERNAME, details: '' });
   console.log('\nПърви администратор: ' + USERNAME + '\nВръзка за парола (важи ' + CFG.INVITE_DAYS + ' дни, след като Worker-ът е публикуван):\n' + inviteLink({ cfg: { appUrl: APP_URL } }, USERNAME, inv.token));
 }
 console.log('\nЗа wrangler.toml:  SP_SITE = "' + site.id + '"');

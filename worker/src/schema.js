@@ -13,8 +13,16 @@ export const SCHEMA = {
     perms: ['Права (JSON)'], notify: ['Известия (JSON)'], twofa: ['Двуфакторен вход'],
     salt: ['Сол'], hash: ['Хеш'], inviteHash: ['Покана (хеш)'], inviteExp: ['Покана до'], codeHash: ['Код (HMAC)'], codeExp: ['Код до'],
     lastLogin: ['Последен вход'], createdAt: ['Създаден'], createdBy: ['Създал'],
-    oauth: ['Външни профили за вход (JSON)', 'long']
+    oauth: ['Външни профили за вход (JSON)', 'long'],
+    persons: ['Достъп до лица (JSON)', 'long'], sessionMin: ['Сесия (минути)']
   }, r => r.username],
+  /* лицата, от чието име се подават заявления: Сдружението и други; всяко с бланка, номерация и поща */
+  persons: ['ADM Лица', {
+    code: ['Код', 'index'], name: ['Наименование'], brand: ['Марка в бланката'], regBasis: ['Регистрация'], eik: ['ЕИК/БУЛСТАТ'],
+    address: ['Адрес', 'long'], oblast: ['Област'], rep: ['Представлява се от'], repPosition: ['Качество'], phone: ['Телефон'],
+    email: ['Имейл в бланката'], web: ['Интернет адрес'], place: ['Място'], mailbox: ['Пощенска кутия'], outPrefix: ['Префикс на Изх. №'],
+    isDefault: ['По подразбиране'], active: ['Активно'], by: ['Въвел'], at: ['Въведено'], updatedAt: ['Променено']
+  }, r => r.code + ' ' + r.name],
   cases: ['ADM Преписки', {
     regNo: ['Рег. №', 'index'], createdAt: ['Въведена'], createdBy: ['Въвел'],
     kind: ['Вид заявление'], regDate: ['Дата на регистриране'], channel: ['Начин на подаване'],
@@ -38,7 +46,7 @@ export const SCHEMA = {
     note: ['Бележки', 'long'], by: ['Въвел'], at: ['Въведено'], updatedAt: ['Променено']
   }, r => r.court + ' ' + r.caseNo + '/' + r.year],
   requests: ['ADM Заявления', {
-    regNo: ['№ на преписка', 'index'], tag: ['Пощенски етикет', 'index'], createdAt: ['Създадена'], createdBy: ['Създал'], updatedAt: ['Променена'],
+    regNo: ['№ на преписка', 'index'], tag: ['Пощенски етикет', 'index'], person: ['Лице (код)', 'index'], createdAt: ['Създадена'], createdBy: ['Създал'], updatedAt: ['Променена'],
     kind: ['Вид'], status: ['Статус'], owner: ['Отговорник'], title: ['Предмет'],
     mode: ['Заявител от името на'], applicant: ['Заявител (JSON)', 'long'], applicantName: ['Заявител'],
     entityId: ['Адресат (ID)'], entity: ['Задължен субект (JSON)', 'long'], entityName: ['Задължен субект'], entityEmail: ['Имейл на субекта'],
@@ -56,7 +64,7 @@ export const SCHEMA = {
   mail: ['ADM Кореспонденция', {
     regNo: ['Преписка', 'index'], messageId: ['Message-ID', 'index'], direction: ['Посока'], at: ['Време'], from: ['От'], to: ['До', 'long'], cc: ['Копие', 'long'],
     subject: ['Тема'], body: ['Текст', 'long'], graphId: ['ID в пощата', 'long'], attachments: ['Прикачени (JSON)', 'long'], docOutNo: ['Документ'], by: ['Изпратил'], matched: ['Разпределено по'],
-    channel: ['Канал'], ref: ['Идентификатор (ССЕВ, № на пратка, вх. №)']
+    channel: ['Канал'], ref: ['Идентификатор (ССЕВ, № на пратка, вх. №)'], box: ['Пощенска кутия']
   }, r => (r.direction || '') + ' ' + (r.subject || '')],
   addressees: ['ADM Адресати', {
     type: ['Вид'], name: ['Име или наименование'], regBasis: ['Регистрация'], eik: ['ЕИК/БУЛСТАТ'],
@@ -73,6 +81,9 @@ export const SCHEMA = {
     at: ['Време'], username: ['Потребител'], ip: ['IP адрес'], agent: ['Браузър'], result: ['Резултат']
   }, r => r.username + ' ' + r.result]
 };
+
+/* сменя се при нови списъци или колони: Cron-ът тогава обновява структурата в SharePoint */
+export const SCHEMA_VER = '2026-11-21';
 
 export const colName = key => 'z' + key[0].toUpperCase() + key.slice(1);
 export const tableKeys = Object.keys(SCHEMA);

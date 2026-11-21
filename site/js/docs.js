@@ -35,17 +35,20 @@ export async function ready() {
 
 const orgLine = o => [o.address, o.email && `имейл: ${o.email}`, o.eik && `${idLabel(o.regBasis)} ${o.eik}`].filter(Boolean).join(' · ');
 
+/* Сдружението е с логото и марката на ЗДОИ4You; другите лица – със своите наименование и интернет адрес */
+const isZdoi = o => o.isDefault !== false;
+const brandOf = o => o.brand || (isZdoi(o) ? 'ЗДОИ4You' : o.name);
+const webOf = o => o.web || (isZdoi(o) ? 'my.zdoi4you.eu' : '');
+
 function letterhead(o) {
+  const info = { stack: [
+    { text: brandOf(o), bold: true, fontSize: 13, color: BLUE },
+    brandOf(o) !== o.name ? { text: o.name, fontSize: 9, color: GRAY } : null,
+    { text: orgLine(o), fontSize: 8.5, color: GRAY },
+    webOf(o) ? { text: webOf(o), fontSize: 9, color: LINE, bold: true } : null
+  ].filter(Boolean), alignment: 'right' };
   return [
-    { columns: [
-      { image: 'logo', width: 120 },
-      { stack: [
-        { text: o.brand || 'ЗДОИ4You', bold: true, fontSize: 13, color: BLUE },
-        { text: o.name, fontSize: 9, color: GRAY },
-        { text: orgLine(o), fontSize: 8.5, color: GRAY },
-        { text: o.web || 'my.zdoi4you.eu', fontSize: 9, color: LINE, bold: true }
-      ], alignment: 'right' }
-    ], columnGap: 12 },
+    isZdoi(o) ? { columns: [{ image: 'logo', width: 120 }, info], columnGap: 12 } : info,
     { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 495, y2: 0, lineWidth: 1, lineColor: LINE }], margin: [0, 8, 0, 12] }
   ];
 }
@@ -112,7 +115,7 @@ function frame(p, content, label) {
     defaultStyle: { font: 'Roboto', fontSize: 10.5, lineHeight: 1.22, color: '#111827' },
     content,
     footer: (page, count) => ({ margin: [50, 14, 50, 0], fontSize: 8, color: '#5A6B85', columns: [
-      { text: `${p.org.brand || 'ЗДОИ4You'} · ${p.org.web || 'my.zdoi4you.eu'}${p.outNo ? ' · Изх. № ' + p.outNo : ''}` },
+      { text: [brandOf(p.org), webOf(p.org), p.outNo ? 'Изх. № ' + p.outNo : ''].filter(Boolean).join(' · ') },
       { text: `стр. ${page} от ${count}`, alignment: 'right', width: 70 }
     ] })
   };

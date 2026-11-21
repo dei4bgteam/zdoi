@@ -13,6 +13,7 @@ import { openSession, recordLogin, oauthOf, dropUser } from './auth.js';
 import { enabledProviders } from './oauth.js';
 import { signingCert, certStatus, ensureCert } from './acme.js';
 import { fromB64 } from './mailbox.js';
+import { reqScope } from './requests.js';
 import * as D from './der.js';
 
 const MAX_PDF = 8 * 1048576;
@@ -21,7 +22,7 @@ async function findDoc(app, outNo, ctx) {
   const doc = (await app.store.list('docs', { outNo: line(outNo, 30) }))[0];
   if (!doc) fail('notfound', 'Документът не е намерен.');
   const r = (await app.store.list('requests', { regNo: doc.regNo }))[0];
-  if (!r || !(ctx.perms.casesAll || r.owner === ctx.username || r.createdBy === ctx.username)) fail('notfound', 'Документът не е намерен.');
+  if (!r || !(await reqScope(app, ctx))(r)) fail('notfound', 'Документът не е намерен.');
   if (r.locked === 'Да') fail('caselocked', 'Преписката е заключена.');
   return { doc, req: r };
 }

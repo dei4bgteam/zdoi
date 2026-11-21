@@ -11,10 +11,11 @@ import { graph } from './graph.js';
 export const mailboxAddress = env => String(env.MAILBOX || 'priemna@zdoi.eu').toLowerCase();
 
 /* priemna@zdoi.eu + p2026-0001 → priemna+p2026-0001@zdoi.eu */
-export function plusAddress(env, tag) {
-  const [local, domain] = mailboxAddress(env).split('@');
+export function plusOf(address, tag) {
+  const [local, domain] = String(address).toLowerCase().split('@');
   return local + '+' + tag + '@' + domain;
 }
+export const plusAddress = (env, tag) => plusOf(mailboxAddress(env), tag);
 
 const rcpt = list => (list || []).filter(Boolean).map(a => ({ emailAddress: { address: a } }));
 const fileAtt = a => ({ '@odata.type': '#microsoft.graph.fileAttachment', name: a.name, contentType: a.contentType || 'application/octet-stream', contentBytes: toB64(a.bytes) });
@@ -31,10 +32,12 @@ export function fromB64(text) {
   return out;
 }
 
-export function graphMailbox(env) {
-  const box = '/users/' + encodeURIComponent(mailboxAddress(env));
+/* address: кутията на лицето (по подразбиране – приемната); приложението трябва да има достъп до нея в Exchange */
+export function graphMailbox(env, address) {
+  const addr = String(address || mailboxAddress(env)).toLowerCase();
+  const box = '/users/' + encodeURIComponent(addr);
   return {
-    address: mailboxAddress(env),
+    address: addr,
 
     /* m: { to[], cc[], subject, text, replyTo, attachments[{name, contentType, bytes}], replyToGraphId } */
     async send(m) {
@@ -88,4 +91,5 @@ export function graphMailbox(env) {
   };
 }
 
-export const getMailbox = env => env.__mailbox || graphMailbox(env);
+export const getMailbox = (env, address) =>
+  (env.__mailboxes && address && env.__mailboxes[String(address).toLowerCase()]) || env.__mailbox || graphMailbox(env, address);

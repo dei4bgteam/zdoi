@@ -6,7 +6,7 @@
  * проверяват офлайн без ключа. Сесията е в бисквитка HttpOnly; в KV се пази само хешът на ключа ѝ.
  */
 
-import { CFG, ROLE_ADMIN, ROLE_PERMS, PERMS } from './config.js';
+import { CFG, ROLE_SUPER, ROLE_PERMS, PERMS, SESSION_CHOICES, isAdminRole, sessionMinOf } from './config.js';
 import { fail, str, stamp } from './util.js';
 import { sha256, randomToken, randomCode, hmac, sameText } from './crypto.js';
 import { audit, mail, throttle, cached, dropCache } from './core.js';
@@ -49,8 +49,18 @@ export function permsOf(u) {
   const out = {};
   list.forEach(k => { if (PERMS.includes(k)) out[k] = true; });
   // наблюдателят само преглежда, каквито и права да са записани
-  if (u.role !== ROLE_ADMIN && !(ROLE_PERMS[u.role] || []).includes('casesEdit')) ['casesEdit', 'courts', 'addressees', 'departments'].forEach(k => delete out[k]);
+  if (!isAdminRole(u.role) && !(ROLE_PERMS[u.role] || []).includes('casesEdit')) ['casesEdit', 'courts', 'addressees', 'departments'].forEach(k => delete out[k]);
   return out;
+}
+
+/*
+ * Достъп до лицата, от чието име се подават заявления: '*' (суперадминистратор – всички),
+ * списък с кодове или null – още не е задаван, тогава само лицето по подразбиране (Сдружението).
+ */
+export function accessOf(u) {
+  if (u.role === ROLE_SUPER) return '*';
+  if (!u.persons) return null;
+  try { const a = JSON.parse(u.persons); return Array.isArray(a) ? a.map(String) : null; } catch (_) { return null; }
 }
 
 export function notifyOf(u) {
@@ -62,6 +72,7 @@ export function notifyOf(u) {
 const meInfo = u => ({
   username: u.username, name: u.name, role: u.role, perms: permsOf(u), twofa: u.twofa === 'Да',
   email: u.email, position: u.position, phone: u.phone, department: u.department, notify: notifyOf(u),
+  sessionMin: sessionMinOf(u), sessionChoices: SESSION_CHOICES,
   linked: Object.fromEntries(Object.entries(oauthOf(u)).map(([p, x]) => [p, { email: x.email || '', name: x.name || '', at: x.at || '' }]))
 });
 
@@ -144,7 +155,7 @@ export async function openSession(app, u, how) {
   await app.store.patch('users', u._id, { lastLogin: stamp() });
   await recordLogin(app, u.username, how ? 'Успешен (' + how + ')' : 'Успешен');
   await audit(app, u.username, how ? 'Вход с ' + how : 'Вход', '', app.ip);
-  const token = randomToken(), exp = Date.now() + CFG.SESSION_MIN * 6e4;
+  const token = randomToken(), exp = Date.now() + sessionMinOf(u) * 6e4;
   await saveSession(app, token, { u: u.username, exp });
   return { __cookie: token, session: exp, me: meInfo(u) };
 }
@@ -162,7 +173,7 @@ export function cookieToken(req) {
 
 const expired = () => fail('session', 'Сесията е изтекла. Влезте отново.');
 
-/* need: user | admin */
+/* need: user | admin | super */
 export async function authenticate(app, token, need) {
   if (!token) expired();
   const raw = await app.kv.get('s:' + (await sha256(token)));
@@ -170,17 +181,32 @@ export async function authenticate(app, token, need) {
   if (!s || s.exp < Date.now()) expired();
   const user = await cached(app, 'usr:' + s.u, 120, async () => {
     const u = await findUser(app, s.u);
-    return u ? { _id: u._id, username: u.username, active: u.active, role: u.role, name: u.name, email: u.email, perms: u.perms, notify: u.notify, department: u.department } : null;
+    return u ? { _id: u._id, username: u.username, active: u.active, role: u.role, name: u.name, email: u.email, perms: u.perms, notify: u.notify, department: u.department, persons: u.persons, sessionMin: u.sessionMin } : null;
   });
   if (!user || user.active !== 'Да') fail('session', 'Достъпът е спрян.');
-  if (need === 'admin' && user.role !== ROLE_ADMIN) fail('role', 'Това действие е само за администратор.');
+  if (need === 'admin' && !isAdminRole(user.role)) fail('role', 'Това действие е само за администратор.');
+  if (need === 'super' && user.role !== ROLE_SUPER) fail('role', 'Това действие е само за суперадминистратор.');
   // плъзгащ се срок; записва се отново най-много веднъж на 5 минути, за да се пестят записите в KV
-  const exp = Date.now() + CFG.SESSION_MIN * 6e4;
+  const exp = Date.now() + sessionMinOf(user) * 6e4;
   if (exp - s.exp > 5 * 6e4) { s.exp = exp; await saveSession(app, token, s); }
   return {
     token, username: s.u, userId: user._id, name: user.name, email: user.email, role: user.role,
-    admin: user.role === ROLE_ADMIN, perms: permsOf(user), notify: notifyOf(user), sessionExp: s.exp
+    admin: isAdminRole(user.role), super: user.role === ROLE_SUPER, access: accessOf(user),
+    perms: permsOf(user), notify: notifyOf(user), sessionExp: s.exp, sessionMin: sessionMinOf(user)
   };
+}
+
+/* продължителност на сесията без действие: от 30 минути до 3 часа; важи веднага и за текущата сесия */
+export async function sessionSave(d, ctx, app) {
+  const minutes = Number(d.minutes);
+  if (!SESSION_CHOICES.includes(minutes)) fail('value', 'Изберете от 30 минути до 3 часа.');
+  const u = await findUser(app, ctx.username);
+  await app.store.patch('users', u._id, { sessionMin: String(minutes) });
+  await dropUser(app, ctx.username);
+  const exp = Date.now() + minutes * 6e4;
+  await saveSession(app, ctx.token, { u: ctx.username, exp });
+  await audit(app, ctx.username, 'Продължителност на сесията', '', minutes + ' мин.');
+  return { sessionMin: minutes, session: exp };
 }
 
 export async function me(d, ctx, app) {

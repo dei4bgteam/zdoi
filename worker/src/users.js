@@ -1,15 +1,27 @@
-/* Потребители, отдели, дневник и входове. Потребителите се добавят само от администратор – няма регистрация. */
+/*
+ * Потребители, отдели, дневник и входове. Потребителите се добавят само от администратор – няма регистрация.
+ * Ролята „Суперадминистратор“ и достъпът до лицата се дават само от суперадминистратор; ако още няма такъв,
+ * администраторът може да назначи първия (и себе си).
+ */
 
-import { CFG, ROLE_ADMIN, ROLES, PERMS } from './config.js';
+import { CFG, ROLE_SUPER, ROLES, PERMS, isAdminRole, sessionMinOf } from './config.js';
 import { fail, str, line, stamp, isEmail, oneOf, view, byDesc } from './util.js';
 import { audit, mail } from './core.js';
-import { USER_RE, newInvite, inviteLink, accessMail, dropUser, findUser, permsOf, notifyOf } from './auth.js';
+import { USER_RE, newInvite, inviteLink, accessMail, dropUser, findUser, permsOf, notifyOf, accessOf } from './auth.js';
+import { allPersons, setUserAccess, DEFAULT_CODE } from './persons.js';
 
-const userView = u => Object.assign(view(u), { customPerms: !!u.perms, perms: permsOf(u), notify: notifyOf(u), pending: !u.salt, twofa: u.twofa === 'Да' });
+const userView = u => Object.assign(view(u), {
+  customPerms: !!u.perms, perms: permsOf(u), notify: notifyOf(u), pending: !u.salt, twofa: u.twofa === 'Да',
+  access: accessOf(u) || [DEFAULT_CODE], sessionMin: sessionMinOf(u)
+});
 
 export async function usersList(d, ctx, app) {
   const [users, departments] = await Promise.all([app.store.list('users'), app.store.list('departments')]);
-  return { users: users.map(userView), departments: departments.filter(x => x.active === 'Да').map(view), perms: PERMS, roles: ROLES };
+  const persons = (await allPersons(app)).map(p => ({ code: p.code, name: p.name, active: p.active }));
+  const noSuper = !users.some(u => u.role === ROLE_SUPER && u.active === 'Да');
+  // ролята „Суперадминистратор“ се дава от суперадминистратор (или от администратор, докато няма такъв)
+  const roles = ctx.super || noSuper ? ROLES : ROLES.filter(r => r !== ROLE_SUPER);
+  return { users: users.map(userView), departments: departments.filter(x => x.active === 'Да').map(view), perms: PERMS, roles, persons, canAccess: !!ctx.super };
 }
 
 /* активните потребители за избор на отговорник – без лични данни */
@@ -33,10 +45,18 @@ export async function usersSave(d, ctx, app) {
   const cur = users.find(u => u.username === username);
   if (d.isNew && cur) fail('duplicate', 'Вече има такъв потребител.');
   if (!d.isNew && !cur) fail('notfound', 'Потребителят не е намерен.');
-  if (username === ctx.username && (v.role !== ROLE_ADMIN || v.active !== 'Да')) fail('value', 'Не можете да отнемете собствената си роля или достъп.');
-  if (!users.some(u => u.role === ROLE_ADMIN && u.active === 'Да' && u.username !== username) && (v.role !== ROLE_ADMIN || v.active !== 'Да')) {
+  const supers = users.filter(u => u.role === ROLE_SUPER && u.active === 'Да'), noSuper = !supers.length;
+  if (v.role === ROLE_SUPER && (!cur || cur.role !== ROLE_SUPER) && !ctx.super && !noSuper) fail('role', 'Роля „Суперадминистратор“ се дава само от суперадминистратор.');
+  if (cur && cur.role === ROLE_SUPER && !ctx.super) fail('role', 'Суперадминистратор се променя само от суперадминистратор.');
+  if (username === ctx.username && (v.active !== 'Да' || (cur && v.role !== cur.role && !(v.role === ROLE_SUPER && noSuper)))) fail('value', 'Не можете да отнемете собствената си роля или достъп.');
+  if (!users.some(u => isAdminRole(u.role) && u.active === 'Да' && u.username !== username) && (!isAdminRole(v.role) || v.active !== 'Да')) {
     fail('value', 'Трябва да има поне един активен администратор.');
   }
+  if (cur && cur.role === ROLE_SUPER && !(v.role === ROLE_SUPER && v.active === 'Да') && !supers.some(u => u.username !== username)) {
+    fail('value', 'Трябва да има поне един активен суперадминистратор.');
+  }
+  // от името на кои лица води преписки – само суперадминистраторът определя
+  if (ctx.super && Array.isArray(d.persons)) v.persons = await setUserAccess(app, d.persons.map(String));
   if (cur) {
     const changed = Object.keys(v).filter(k => v[k] !== (cur[k] || ''));
     if (!changed.length) return { username };
