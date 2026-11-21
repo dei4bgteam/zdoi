@@ -249,6 +249,11 @@ export default {
       const { store, kv } = services(env);
       return oauth.handleOAuth(req, makeApp(env, store, kv, req), cookie);
     }
+    // сайтът: файл, който не съществува – страницата 404 (самите файлове се сервират преди Worker-а)
+    if (env.ASSETS && req.method === 'GET' && !path.startsWith('/api')) {
+      const page = await env.ASSETS.fetch(new Request(new URL('/404.html', req.url)));
+      return new Response(page.body, { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
     return json({ ok: false, error: 'notfound' }, 404);
   },
   async scheduled(event, env, ctx) {

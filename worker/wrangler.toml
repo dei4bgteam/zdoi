@@ -1,14 +1,18 @@
-# ADM ЗДОИ4You – Cloudflare Worker на adm.zdoi.eu/api/*
+# ADM ЗДОИ4You – Cloudflare Worker на adm.zdoi.eu: сайтът и API-то (/api/*)
 name = "adm-zdoi"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
 workers_dev = false
 
+# целият адрес: сайтът (worker/public, от site/ с tools/build-site.mjs), API-то и проверката на Let's Encrypt
 routes = [
-  { pattern = "adm.zdoi.eu/api*", zone_name = "zdoi.eu" },
-  # проверка от Let's Encrypt за сертификата, с който се подписват заявките към B-Trust BISS (КЕП)
-  { pattern = "adm.zdoi.eu/.well-known/acme-challenge/*", zone_name = "zdoi.eu" }
+  { pattern = "adm.zdoi.eu/*", zone_name = "zdoi.eu" }
 ]
+
+# сайтът: файловете се сервират преди Worker-а; останалите адреси (/api…) отиват в Worker-а
+[assets]
+directory = "./public"
+binding = "ASSETS"
 
 # входяща поща на приемната – на 5 минути; напомняния за срокове – веднъж на ден след 8:00 ч.
 [triggers]

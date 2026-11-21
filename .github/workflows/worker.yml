@@ -26,6 +26,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      # сайтът се публикува заедно с Worker-а (worker/public)
+      - name: Сайт
+        run: node tools/build-site.mjs
       - name: wrangler deploy
         working-directory: worker
         run: npx --yes wrangler@4 deploy
