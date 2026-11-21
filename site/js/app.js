@@ -120,10 +120,11 @@ async function startSession(m) {
 }
 
 function tick() {
-  const el = $('timer');
+  const el = $('timer'), txt = $('timer-text');
   const left = Math.max(0, Math.round((expAt - Date.now()) / 1000));
-  if (el) {
-    el.textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+  if (el && txt) {
+    const hh = Math.floor(left / 3600), mm = Math.floor(left % 3600 / 60), ss = left % 60;
+    txt.textContent = (hh ? hh + ':' + String(mm).padStart(2, '0') : mm) + ':' + String(ss).padStart(2, '0');
     el.classList.toggle('warn', left < 120);
   }
   if (left === 0 && me) endSession('Сесията изтече поради бездействие.');
@@ -203,57 +204,198 @@ const kv = pairs => h('dl', { class: 'kv' }, pairs.filter(Boolean).map(([k, v]) 
 
 /* ---------- оформление ---------- */
 
+/* ---------- обвивка: странично меню, горна лента, търсене ---------- */
+
+/* иконки (константи, вмъкват се с innerHTML) – 24×24, контур */
+const ICON = {
+  home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+  send: '<path d="M21 3 10 14"/><path d="M21 3l-7 18-4-7-7-4z"/>',
+  book: '<path d="M4 4h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3z"/><path d="M4 17a3 3 0 0 1 3-3h11"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  inbox: '<path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 5h14l2 8v6H3v-6z"/>',
+  scale: '<path d="M12 3v18"/><path d="M5 7h14"/><path d="m5 7-3 7a3 3 0 0 0 6 0z"/><path d="m19 7-3 7a3 3 0 0 0 6 0z"/><path d="M8 21h8"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14a6 6 0 0 1 3.5 6"/>',
+  contacts: '<rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10" r="3"/><path d="M7.5 17a4.5 4.5 0 0 1 9 0"/>',
+  calc: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8"/><path d="M8 12h.01M12 12h.01M16 12h.01M8 16h.01M12 16h.01M16 16h.01"/>',
+  org: '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9"/><path d="m17 6 3 3"/>',
+  building: '<path d="M4 21V5l8-3 8 3v16"/><path d="M9 21v-4h6v4"/><path d="M8 8h.01M12 8h.01M16 8h.01M8 12h.01M12 12h.01M16 12h.01"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>'
+};
+function icon(name, cls) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true'); s.setAttribute('class', 'ico' + (cls ? ' ' + cls : ''));
+  s.innerHTML = ICON[name] || '';
+  return s;
+}
+
+/* групи в страничното меню; [адрес, текст, иконка, видим, ключ за брояч] */
 const NAV = () => [
-  ['#/dashboard', 'Табло', true],
-  ['#/requests', 'Заявления', true],
-  ['#/register', 'Изходящ регистър', true],
-  ['#/mail', 'Поща', !!me.perms.casesAll],
-  ['#/cases', 'Входящ регистър', true],
-  ['#/courts', 'Дела', true],
-  ['#/addressees', 'Адресати', true],
-  ['#/calc', 'Срокове', true],
-  ['#/departments', 'Отдели', true],
-  ['#/kep', 'Проверка на КЕП', true],
-  ['#/users', 'Потребители', isAdmin()],
-  ['#/persons', 'Лица', isSuper()],
-  ['#/system', 'Система', isAdmin()],
-  ['#/log', 'Дневник', !!me.perms.log],
-  ['#/profile', 'Моят профил', true]
-];
+  ['Работа', [
+    ['#/dashboard', 'Табло', 'home', true],
+    ['#/requests', 'Заявления', 'send', true, 'requests'],
+    ['#/register', 'Изходящ регистър', 'book', true],
+    ['#/mail', 'Поща за разпределяне', 'mail', !!me.perms.casesAll, 'mail'],
+    ['#/cases', 'Входящ регистър', 'inbox', true, 'cases'],
+    ['#/courts', 'Съдебни дела', 'scale', true]
+  ]],
+  ['Справочници', [
+    ['#/addressees', 'Адресати', 'contacts', true],
+    ['#/departments', 'Отдели', 'org', true],
+    ['#/calc', 'Калкулатор на срокове', 'calc', true],
+    ['#/kep', 'Проверка на КЕП', 'key', true]
+  ]],
+  ['Администрация', [
+    ['#/users', 'Потребители', 'users', isAdmin()],
+    ['#/persons', 'Лица и достъп', 'building', isSuper()],
+    ['#/system', 'Система', 'gear', isAdmin()],
+    ['#/log', 'Дневник', 'list', !!me.perms.log]
+  ]]
+].map(([g, items]) => [g, items.filter(x => x[3])]).filter(([, items]) => items.length);
 
 function themeSelect() {
   const cur = document.documentElement.getAttribute('data-theme');
   const s = h('select', { class: 'theme', 'aria-label': 'Тема', onchange: e => {
     document.documentElement.setAttribute('data-theme', e.target.value);
     try { localStorage.setItem('theme', e.target.value); } catch (_) { /* без памет */ }
-  } }, [['light', 'Светла'], ['dark', 'Тъмна'], ['blue', 'Синя']].map(([v, t]) => h('option', { value: v }, t)));
+  } }, [['light', 'Светла тема'], ['dark', 'Тъмна тема'], ['blue', 'Синя тема']].map(([v, t]) => h('option', { value: v }, t)));
   s.value = cur;
   return s;
 }
 
+const initials = name => String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+
+/* падащо меню: бутон + панел; затваря се при клик навън и с Esc */
+function dropdown(button, panel) {
+  const wrap = h('div', { class: 'dd' }, button, panel);
+  panel.hidden = true;
+  const close = () => { panel.hidden = true; button.setAttribute('aria-expanded', 'false'); };
+  button.setAttribute('aria-haspopup', 'true'); button.setAttribute('aria-expanded', 'false');
+  button.addEventListener('click', e => { e.stopPropagation(); const open = panel.hidden; document.querySelectorAll('.dd-panel').forEach(p => { p.hidden = true; }); panel.hidden = !open; button.setAttribute('aria-expanded', String(open)); });
+  panel.addEventListener('click', e => { if (e.target.closest('a,button')) close(); });
+  document.addEventListener('click', e => { if (!wrap.contains(e.target)) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  return wrap;
+}
+
 function shell() {
   if ($('view')) { markNav(); return; }
-  const header = h('header', { class: 'top' }, h('div', { class: 'bar' },
-    h('a', { class: 'brand', href: '#/dashboard' }, h('span', { class: 'logo-plate mini' }, h('img', { src: 'assets/logo-site.png', alt: 'ЗДОИ4You' }))),
-    h('strong', null, 'ADM'),
-    h('div', { class: 'user' },
-      h('div', { class: 'who' }, h('div', null, me.name), h('div', { class: 'muted' }, me.role)),
-      h('span', { class: 'timer muted', id: 'timer', title: 'Оставащо време на сесията' }, ''),
-      themeSelect(),
-      h('button', { class: 'btn sm', onclick: async () => { try { await api('logout'); } catch (_) { /* изтекла */ } endSession('Излязохте от системата.'); } }, 'Изход')),
-    h('nav', { class: 'tabs', id: 'nav' }, NAV().filter(x => x[2]).map(([href, t]) => h('a', { href }, t)))));
-  $('app').replaceChildren(header, h('main', { id: 'view' }), h('footer', { class: 'app-foot small muted' }, 'ADM ЗДОИ4You – вътрешна система. Данните се пазят в SharePoint.'));
+  const side = h('aside', { class: 'side', id: 'side' },
+    h('a', { class: 'side-brand', href: '#/dashboard' }, h('span', { class: 'logo-plate mini' }, h('img', { src: 'assets/logo-site.png', alt: 'ЗДОИ4You' })), h('span', { class: 'side-name' }, h('b', null, 'ADM'), h('small', null, 'ЗДОИ4You'))),
+    me.perms.casesEdit ? h('a', { class: 'btn primary side-new', href: '#/request/new' }, icon('plus'), 'Ново заявление') : null,
+    h('nav', { id: 'nav', 'aria-label': 'Основно меню' }, NAV().map(([group, items]) => h('div', { class: 'nav-group' },
+      h('div', { class: 'nav-title' }, group),
+      items.map(([href, text, ico, , key]) => h('a', { href }, icon(ico), h('span', null, text), key ? h('span', { class: 'nav-count', 'data-count': key, hidden: true }) : null))))),
+    h('div', { class: 'side-foot small muted' }, 'Данните се пазят в SharePoint.'));
+  const scrim = h('div', { class: 'scrim', onclick: () => document.body.classList.remove('nav-open') });
+
+  const newMenu = me.perms.casesEdit ? dropdown(h('button', { class: 'btn primary sm' }, icon('plus'), h('span', { class: 'hide-sm' }, 'Ново'), icon('chevron', 'sm')),
+    h('div', { class: 'dd-panel' },
+      h('a', { href: '#/request/new' }, icon('send'), 'Заявление до институция'),
+      h('a', { href: '#/case/new' }, icon('inbox'), 'Входящо заявление'),
+      me.perms.courts ? h('a', { href: '#/courts' }, icon('scale'), 'Съдебно дело') : null,
+      me.perms.addressees ? h('a', { href: '#/addressees' }, icon('contacts'), 'Адресат') : null)) : null;
+
+  const userMenu = dropdown(h('button', { class: 'user-chip' }, h('span', { class: 'avatar' }, initials(me.name)), h('span', { class: 'who hide-sm' }, h('b', null, me.name), h('small', null, me.role)), icon('chevron', 'sm')),
+    h('div', { class: 'dd-panel right' },
+      h('div', { class: 'dd-head' }, h('b', null, me.name), h('div', { class: 'small muted' }, me.username + ' · ' + me.role)),
+      h('a', { href: '#/profile' }, icon('user'), 'Моят профил'),
+      h('a', { href: '#/logins' }, icon('clock'), 'Моите входове'),
+      h('div', { class: 'dd-row' }, themeSelect()),
+      h('button', { type: 'button', onclick: async () => { try { await api('logout'); } catch (_) { /* изтекла */ } endSession('Излязохте от системата.'); } }, icon('logout'), 'Изход')));
+
+  const top = h('header', { class: 'topbar' },
+    h('button', { class: 'icon-btn menu-btn', 'aria-label': 'Меню', onclick: () => document.body.classList.toggle('nav-open') }, icon('menu')),
+    searchBox(),
+    h('div', { class: 'top-right' },
+      newMenu,
+      h('span', { class: 'timer', id: 'timer', title: 'Оставащо време на сесията (избира се в „Моят профил“)' }, icon('clock', 'sm'), h('span', { id: 'timer-text' }, '')),
+      userMenu));
+  $('app').replaceChildren(h('div', { class: 'layout' }, side, scrim, h('div', { class: 'content' }, top, h('main', { id: 'view' }))));
   markNav();
   tick();
+  refreshCounts();
 }
 
 function markNav() {
-  const cur = location.hash.split('/').slice(0, 2).join('/');
-  document.querySelectorAll('#nav a').forEach(a => {
-    const on = a.getAttribute('href') === cur || (cur === '#/case' && a.getAttribute('href') === '#/cases') || (cur === '#/request' && a.getAttribute('href') === '#/requests');
-    a.classList.toggle('on', on);
-  });
+  const cur = location.hash.split('?')[0].split('/').slice(0, 2).join('/');
+  const alias = { '#/case': '#/cases', '#/request': '#/requests', '#/logins': '#/users' };
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === (alias[cur] || cur)));
+  document.body.classList.remove('nav-open');
 }
+
+/* броячи в менюто: изтекли срокове и неразпределена поща (най-много веднъж на 2 минути) */
+let countsAt = 0;
+async function refreshCounts(force) {
+  if (!me || (!force && Date.now() - countsAt < 120000)) return;
+  countsAt = Date.now();
+  try {
+    const d = await api('dashboard');
+    const set = (key, n, cls) => document.querySelectorAll('[data-count="' + key + '"]').forEach(el => { el.textContent = n > 99 ? '99+' : String(n); el.hidden = !n; el.className = 'nav-count ' + (cls || ''); });
+    set('requests', d.reqSilent.length, 'bad');
+    set('mail', d.unassignedMail, 'warn');
+    set('cases', d.overdue.length, 'bad');
+  } catch (_) { /* броячите не са важни */ }
+}
+
+/* ---------- търсене навсякъде (Ctrl+K или „/“) ---------- */
+
+let searchCache = null;
+async function searchData() {
+  if (searchCache && Date.now() - searchCache.at < 60000) return searchCache;
+  const [r, c] = await Promise.all([api('req.list').catch(() => ({ requests: [] })), api('case.list').catch(() => ({ cases: [] }))]);
+  searchCache = { at: Date.now(), requests: r.requests || [], cases: c.cases || [] };
+  return searchCache;
+}
+
+function searchBox() {
+  const input = h('input', { type: 'search', placeholder: 'Търсене: номер, субект, заявител…', 'aria-label': 'Търсене', autocomplete: 'off' });
+  const list = h('div', { class: 'search-results', role: 'listbox', hidden: true });
+  let items = [], sel = -1, timer = null;
+  const go = it => { if (!it) return; list.hidden = true; input.value = ''; input.blur(); location.hash = it.href; };
+  const paint = () => list.querySelectorAll('a').forEach((a, i) => a.classList.toggle('on', i === sel));
+  const run = async () => {
+    const t = input.value.trim().toLowerCase();
+    if (t.length < 2) { list.hidden = true; return; }
+    const d = await searchData();
+    const hit = (...xs) => xs.join(' ').toLowerCase().includes(t);
+    items = [
+      ...d.requests.filter(r => hit(r.regNo, r.entityName, r.applicantName, r.title, r.outNo)).slice(0, 7).map(r => ({ href: '#/request/' + encodeURIComponent(r.regNo), no: r.regNo, text: r.entityName + (r.title ? ' – ' + r.title : ''), kind: 'Заявление', status: r.status })),
+      ...d.cases.filter(c => hit(c.regNo, c.applicantName, c.subject)).slice(0, 7).map(c => ({ href: '#/case/' + encodeURIComponent(c.regNo), no: c.regNo, text: c.applicantName + (c.subject ? ' – ' + c.subject : ''), kind: 'Входящо', status: c.status }))
+    ];
+    sel = items.length ? 0 : -1;
+    list.replaceChildren(...(items.length ? items.map(it => h('a', { href: it.href, role: 'option', onclick: e => { e.preventDefault(); go(it); } },
+      h('span', { class: 'sr-kind' }, it.kind), h('span', { class: 'sr-main' }, h('b', { class: 'mono' }, it.no), h('span', null, it.text)), h('span', { class: 'pill' }, it.status || '—')))
+      : [h('div', { class: 'empty' }, 'Няма резултати за „' + input.value.trim() + '“.')]));
+    list.hidden = false; paint();
+  };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => run().catch(() => {}), 150); });
+  input.addEventListener('focus', () => { if (input.value.trim().length >= 2) run().catch(() => {}); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); paint(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); paint(); }
+    else if (e.key === 'Enter') { e.preventDefault(); go(items[sel]); }
+    else if (e.key === 'Escape') { list.hidden = true; input.blur(); }
+  });
+  input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+  return h('div', { class: 'search' }, icon('search'), input, h('kbd', { class: 'hide-sm' }, 'Ctrl K'), list);
+}
+
+document.addEventListener('keydown', e => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '') || (e.target && e.target.isContentEditable);
+  if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing)) {
+    const s = document.querySelector('.search input');
+    if (s) { e.preventDefault(); s.focus(); s.select(); }
+  }
+});
 
 const head = (title, ...actions) => h('div', { class: 'head' }, h('h1', null, title), h('div', { class: 'actions' }, actions));
 const loading = () => setView(h('p', { class: 'loading' }, 'Зареждане…'));
@@ -1873,6 +2015,7 @@ async function route() {
   }
   if (['login', 'activate', 'forgot', 'code'].includes(page)) { location.hash = '#/dashboard'; return; }
   shell();
+  refreshCounts();
   const q = new URLSearchParams(query || '');
   if (page === 'profile' && (q.get('ok') || q.get('err'))) { toast(q.get('ok') || q.get('err')); history.replaceState(null, '', '#/profile'); }
   switch (page) {

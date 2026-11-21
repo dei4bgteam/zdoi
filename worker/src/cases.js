@@ -297,7 +297,7 @@ export async function courtSave(d, ctx, app) {
   // делото се води и при заключена преписка; връзката е към получено (ВХ-…) или изходящо заявление (П-…)
   if (v.regNo && /^П-/.test(v.regNo)) {
     const r = (await app.store.list('requests', { regNo: v.regNo }))[0];
-    if (!r || !(ctx.perms.casesAll || r.owner === ctx.username || r.createdBy === ctx.username)) fail('notfound', 'Преписката не е намерена.');
+    if (!r || !(await reqScope(app, ctx))(r)) fail('notfound', 'Преписката не е намерена.');
   } else if (v.regNo) await findCase(app, v.regNo, ctx);
   const rows = await app.store.list('courts');
   if (rows.some(x => x.court === v.court && x.caseNo === v.caseNo && x.year === v.year && x._id !== String(d.id || ''))) fail('duplicate', 'Това дело вече е въведено.');
