@@ -412,7 +412,6 @@ async function casesView(query) {
     const q = h('input', { type: 'search', placeholder: 'Търсене: номер, заявител, описание…', 'aria-label': 'Търсене' });
     const st = h('select', { 'aria-label': 'Статус' }, h('option', { value: '' }, 'Всички статуси'), h('option', { value: 'open' }, 'Отворени'), boot.lists.statuses.map(s => h('option', { value: s }, s)));
     const own = h('select', { 'aria-label': 'Отговорник' }, h('option', { value: '' }, 'Всички отговорници'), h('option', { value: 'mine' }, 'Моите'), h('option', { value: 'none' }, 'Без отговорник'), boot.users.map(u => h('option', { value: 'u:' + u.username }, u.name)));
-    const per = h('select', { 'aria-label': 'Лице', hidden: !manyPersons() }, h('option', { value: '' }, 'Всички лица'), personsAll().map(p => h('option', { value: p.code }, p.name)));
     const due = h('select', { 'aria-label': 'Срок' }, h('option', { value: '' }, 'Всички срокове'), h('option', { value: 'overdue' }, 'Изтекъл срок'), h('option', { value: 'soon' }, 'До 3 дни'));
     if (preset === 'mine' || preset === 'none') own.value = preset;
     if (preset === 'overdue' || preset === 'soon') due.value = preset;
@@ -725,7 +724,21 @@ async function usersView() {
         usersView();
       }, { wide: true, extra });
     };
-    setView(head('Потребители', h('button', { class: 'btn primary', onclick: () => edit({}) }, 'Нов потребител')),
+    // докато няма суперадминистратор, администраторът може да стане такъв (лицата и достъпът до тях)
+    const self = d.users.find(u => u.username === me.username);
+    const becomeSuper = d.noSuper && self ? h('div', { class: 'card stack mb-12' },
+      h('b', null, 'В системата още няма суперадминистратор.'),
+      h('p', { class: 'small muted' }, 'Суперадминистраторът управлява лицата, от чието име се подават заявления, и кой потребител до кое лице има достъп. Вие като администратор можете да станете първият.'),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async e => {
+        if (!confirm('Да станете ли суперадминистратор?')) return;
+        e.target.disabled = true;
+        try {
+          await api('users.save', Object.assign({}, self, { isNew: false, role: 'Суперадминистратор', active: true, perms: self.customPerms ? Object.keys(self.perms) : null }));
+          me = (await api('me')).me; boot = await api('bootstrap');
+          $('app').replaceChildren(); shell(); toast('Вече сте суперадминистратор. Менюто „Лица“ е отгоре.'); usersView();
+        } catch (ex) { toast(ex.message); e.target.disabled = false; }
+      } }, 'Стани суперадминистратор'))) : null;
+    setView(head('Потребители', h('button', { class: 'btn primary', onclick: () => edit({}) }, 'Нов потребител')), becomeSuper,
       h('div', { class: 'card' }, table(['Потребител', 'Име', 'Роля', 'Лица', 'Отдел', 'Състояние', 'Последен вход', ''], d.users.map(u => h('tr', null,
         h('td', { class: 'mono' }, u.username), h('td', null, u.name, u.position ? h('div', { class: 'small muted' }, u.position) : null), h('td', null, u.role),
         h('td', { class: 'small' }, u.access === '*' ? 'всички' : d.persons.filter(p => (u.access || []).includes(p.code)).map(p => p.name).join(', ') || '—'),
@@ -951,6 +964,7 @@ async function requestsView(query) {
     const preset = new URLSearchParams(query || '').get('f') || '';
     const q = h('input', { type: 'search', placeholder: 'Търсене: номер, субект, заявител, предмет…', 'aria-label': 'Търсене' });
     const st = h('select', { 'aria-label': 'Статус' }, h('option', { value: '' }, 'Всички статуси'), boot.lists.reqStatuses.map(s => h('option', { value: s }, s)));
+    const per = h('select', { 'aria-label': 'Лице', hidden: !manyPersons() }, h('option', { value: '' }, 'Всички лица'), personsAll().map(p => h('option', { value: p.code }, p.name)));
     const due = h('select', { 'aria-label': 'Срок' }, h('option', { value: '' }, 'Всички'), h('option', { value: 'overdue' }, 'Без отговор в срок'), h('option', { value: 'ours' }, 'Чака наше уточнение'), h('option', { value: 'mine' }, 'Моите'));
     if (preset === 'draft') st.value = 'Чернова';
     if (preset === 'overdue') due.value = 'overdue';

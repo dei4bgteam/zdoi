@@ -21,7 +21,7 @@ export async function usersList(d, ctx, app) {
   const noSuper = !users.some(u => u.role === ROLE_SUPER && u.active === 'Да');
   // ролята „Суперадминистратор“ се дава от суперадминистратор (или от администратор, докато няма такъв)
   const roles = ctx.super || noSuper ? ROLES : ROLES.filter(r => r !== ROLE_SUPER);
-  return { users: users.map(userView), departments: departments.filter(x => x.active === 'Да').map(view), perms: PERMS, roles, persons, canAccess: !!ctx.super };
+  return { users: users.map(userView), departments: departments.filter(x => x.active === 'Да').map(view), perms: PERMS, roles, persons, canAccess: !!ctx.super, noSuper };
 }
 
 /* активните потребители за избор на отговорник – без лични данни */
