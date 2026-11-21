@@ -34,11 +34,16 @@ async function call(port, path, body, ms) {
   } finally { clearTimeout(t); }
 }
 
+/*
+ * Всички портове наведнъж: затворените отказват веднага, а отговорът от BISS може да закъснее, докато
+ * браузърът (Firefox) пита за достъп до локалната мрежа – затова изчакването е дълго, а не по 1,5 с на порт.
+ */
 export async function findBiss() {
-  for (const p of PORTS) {
-    try { const v = await call(p, '/version', null, 1500); if (v && v.version) return { port: p, version: v.version }; } catch (_) { /* следващият порт */ }
-  }
-  return null;
+  const probe = p => call(p, '/version', null, 60000).then(v => {
+    if (v && v.version) return { port: p, version: v.version };
+    throw new Error('не е BISS');
+  });
+  try { return await Promise.any(PORTS.map(probe)); } catch (_) { return null; }
 }
 
 const bissError = r => {
